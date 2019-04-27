@@ -20,5 +20,6 @@ from stocks import views
 
 urlpatterns = [
 	url(r'^$', views.index, name='index'),
-	path('stocks/<symbol>', views.detail_view, name='detail_view'),
+	url('detail_view/', views.detail_view, name='detail_view'),
+	url(r'^results/$', views.search, name='search'),
 ]

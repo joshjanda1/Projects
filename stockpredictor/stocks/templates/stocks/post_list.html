@@ -1,0 +1,6 @@
+{% block content %}
+<form method="GET" action="{%url stocks:search %}">
+	<input name="usr_search" value="{{request.GET.usr_search}}" placeholder="Search">
+	<button class="btn btn-success" type="submit">Search</button>
+	</input>
+</form>

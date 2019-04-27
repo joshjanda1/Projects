@@ -3,18 +3,19 @@ from django.template import loader
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from . import services
+from django.db.models import Q
 
 # Create your views here.
 
-def detail_view(request, symbol):
+def detail_view(request):
 	"""
 		Gives details on stock symbol.
 		Parameters:
 		- Request -> Request
 		- Symbol -> Trading Symbol, such as SPX for SP500
 	"""
-	
-	template = loader.get_template('stocks.detail.html')
+	symbol = request.GET.get('usr_search')
+	template = loader.get_template('stocks/detail.html')
 	
 	get_stock_info_api = services.get_stock(symbol)
 	
@@ -23,14 +24,14 @@ def detail_view(request, symbol):
 	
 	stock_info = {
 		'symbol': symbol,
-		'today_close': get_stock_info_api['Close'][-1],#gets todays closing price
-		'today_open': get_stock_info_api['Open'][-1],#gets todays open price
-		'today_high': get_stock_info_api['High'][-1],#gets todays high
-		'today_low': get_stock_info_api['Low'][-1],#gets todays low
-		'today_volume': get_stock_info_api['Volume'][-1],
+		'today_close': get_stock_info_api['Close'].iloc[-1],#gets todays closing price
+		'today_open': get_stock_info_api['Open'].iloc[-1],#gets todays open price
+		'today_high': get_stock_info_api['High'].iloc[-1],#gets todays high
+		'today_low': get_stock_info_api['Low'].iloc[-1],#gets todays low
+		'today_volume': get_stock_info_api['Volume'].iloc[-1],
 	}
 	
-	return HttpResponse(template.render(stock_quote, request))
+	return HttpResponse(template.render(stock_info, request))
 	
 
 def index(request):
@@ -39,3 +40,13 @@ def index(request):
 	context = {}
 	return HttpResponse(template.render(context, request))
 	
+def search(request):
+	template = loader.get_template('post_list.html')
+	
+	query = requests.GET.get('usr_search')
+	test = {
+		'test':'test'
+	}
+	
+	
+	return HttpResponse(template.render(test, request))

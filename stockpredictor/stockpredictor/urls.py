@@ -21,5 +21,5 @@ from stocks import views
 urlpatterns = [
     path('admin/', admin.site.urls),
 	url(r'^', include('stocks.urls'), name='index'),
-	url(r'^stocks/', include('stocks.urls'), name='index'),
+	#url(r'^', include('stocks.urls'), name='index'),
 ]
