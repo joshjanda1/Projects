@@ -15,11 +15,13 @@ Including another URLconf
 """
 from django.urls import path
 from django.conf.urls import url, include
+from stocks.views import detail_view
 from stocks import views
 
 
 urlpatterns = [
 	url(r'^$', views.index, name='index'),
-	url('detail_view/', views.detail_view, name='detail_view'),
-	url(r'^results/$', views.search, name='search'),
+	url(r'detail_view/', detail_view, name='detail_view'),
+	url('', detail_view, name='BokehJS_loader')
+	#url(r'^results/$', views.search, name='search'),
 ]

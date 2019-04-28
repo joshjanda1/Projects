@@ -27,15 +27,15 @@ def get_stock(symbol='SPX'):
 		
 	intermediate_data = pd.concat([data, sma, macd, rsi, adx], axis=1, sort=True)
 	
-	data = intermediate_data.reset_index(drop=True)#reset index so standard..
+	data = intermediate_data.reset_index()#reset index so standard..
 	data['Open'], data['High'], data['Low'], data['Volume'], data['Close'] = data['1. open'], data['2. high'], data['3. low'], data['5. volume'], data['4. close']
 	data = data.drop(['1. open', '2. high', '3. low', '4. close', '5. volume'], axis=1)#gets conventional names for labels
 	#now remove null values for first month...
 	data = data[39:]
-	#time = data['index'] #allows us to know time of data while reseting index to integers for easier use
-	#data = data.drop('index', axis=1)
+	time = data['index'] #allows us to know time of data while reseting index to integers for easier use
+	data = data.drop('index', axis=1)
 	data = data.reset_index(drop = True) #resets index one more time since we dropped initial values in data since null
 	final_data = data
-	return final_data
+	return final_data, time
 		
     

@@ -1,5 +1,25 @@
 <html>
-<head>
+  <head>
+    
+      <meta charset="utf-8">
+      
+      
+        
+          
+        <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-1.1.0.min.css" type="text/css" />
+        
+        
+          
+        <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-1.1.0.min.js"></script>
+        <script type="text/javascript">
+            Bokeh.set_log_level("info");
+        </script>
+        
+      
+      
+    
+  </head>
+
 <style>
 * {box-sizing: border-box;}
 
@@ -66,7 +86,7 @@ body {
 .center {
 	text-align: center;
 	margin: 0 auto;
-	margin-top: 350px;
+	margin-top: 200px;
 	top: 50%;
 	width: 50%;
 	border: 6px solid blue;
@@ -77,6 +97,7 @@ body {
 </style>
 </head>
 <body>
+<title>{{ symbol }} Data</title>
 
 <div class="topnav">
 	<a class="active" href="#home">Home</a>
@@ -93,11 +114,18 @@ body {
 
 <div class="center">
 	<li>Symbol: {{ symbol }}</li>
-	<li>Last Trading Day Open: 			${{ today_open }}</li>
-	<li>Last Trading Day Close:		 	${{ today_close }}</li>
-	<li>Last Trading Day Low: 			${{ today_low }}</li>
-	<li>Last Trading Day High: 			${{ today_high }}</li>
-	<li>Last Trading Day Volume: 		 {{ today_volume }}</li>
+	<li>Last Trading Day Open: ${{ today_open }}</li>
+	<li>Last Trading Day Close: ${{ today_close }}</li>
+	<li>Last Trading Day Low: ${{ today_low }}</li>
+	<li>Last Trading Day High: ${{ today_high }}</li>
+	<li>Last Trading Day Volume: {{ today_volume }}</li>
+	<li>10 Period Volatility: {{ current_volatility }}</li>
+	<p>Below is a plot of closing prices of {{symbol}}</p>
+	
+	<center>{{ div | safe }}</center>
+	
+	{{ script | safe }}
+
 </div>
 </body>
 </html>
