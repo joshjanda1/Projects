@@ -7,10 +7,12 @@
         
           
         <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-1.1.0.min.css" type="text/css" />
+		<link href=”http://cdn.pydata.org/bokeh/release/bokeh-widgets-1.1.0.min.css" rel=”stylesheet” type=”text/css” />
         
         
           
         <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-1.1.0.min.js"></script>
+		<script src=”http://cdn.pydata.org/bokeh/release/bokeh-widgets-1.1.0.min.js"></script>
         <script type="text/javascript">
             Bokeh.set_log_level("info");
         </script>
@@ -113,19 +115,43 @@ body {
 </div>
 
 <div class="center">
-	<li>Symbol: {{ symbol }}</li>
-	<li>Last Trading Day Open: ${{ today_open }}</li>
-	<li>Last Trading Day Close: ${{ today_close }}</li>
-	<li>Last Trading Day Low: ${{ today_low }}</li>
-	<li>Last Trading Day High: ${{ today_high }}</li>
-	<li>Last Trading Day Volume: {{ today_volume }}</li>
-	<li>10 Period Volatility: {{ current_volatility }}</li>
-	<p>Below is a plot of closing prices of {{symbol}}</p>
-	
+	<h1>Stock Info of {{ symbol }} ({{ company }})</h1>
 	<center>{{ div | safe }}</center>
 	
 	{{ script | safe }}
-
+	<center><table>
+		<tr>
+			<th>Last Trading Day Open</th>
+			<th>${{ today_open }}</th>
+		</tr>
+		<tr>
+			<th>Last Trading Day Close</th>
+			<th>${{ today_close }}</th>
+		</tr>
+		<tr>
+			<th>Last Trading Day Low</th>
+			<th>${{ today_low }}</th>
+		</tr>
+		<tr>
+			<th>Last Trading Day High</th>
+			<th>${{ today_high }}</th>
+		</tr>
+		<tr>
+			<th>Volume of Last Trading Day</th>
+			<th> {{ today_volume }}</th>
+		</tr>
+			<th>10 Day Volatility</th>
+			<th> {{ current_volatility }}</th>
+		</tr>
+		<tr>
+			<th>Percentage Change from Day Before</th>
+			<th> {{ one_day_percent_change }}%</th>
+		</tr>
+	</table></center>
+	<br></br>
+	<footer>
+		Data provided for free by <a href="https://iextrading.com/developer">IEX</a>. View <a href=https://iextrading.com/api-exhibit-a/">IEX’s Terms of Use</a>.
+	</footer>
 </div>
 </body>
 </html>
