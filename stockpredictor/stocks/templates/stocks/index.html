@@ -1,5 +1,26 @@
 <html>
-<head>
+  <head>
+    
+      <meta charset="utf-8">
+      
+      
+        
+          
+        <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-1.1.0.min.css" type="text/css" />
+		<link href=”http://cdn.pydata.org/bokeh/release/bokeh-widgets-1.1.0.min.css" rel=”stylesheet” type=”text/css” />
+        
+        
+          
+        <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-1.1.0.min.js"></script>
+		<script src=”http://cdn.pydata.org/bokeh/release/bokeh-widgets-1.1.0.min.js"></script>
+        <script type="text/javascript">
+            Bokeh.set_log_level("info");
+        </script>
+        
+      
+      
+    
+  </head>
 <style>
 * {box-sizing: border-box;}
 
@@ -59,6 +80,16 @@ body {
 	background: #ccc;
 }
 
+.sidegraph {
+	float: left;
+	margin: 0 auto;
+	margin-top: 15px;
+	text-align: left;
+	top: 50%;
+	width: 50%;
+	padding: 10px;
+	font-size = 20px;
+}
 
 
 </style>
@@ -75,6 +106,9 @@ body {
 			<button type="submit">Search</button>
 		</form>
 	</div>
+</div>
+<div class="sidegraph">
+	<h1>Stock Info of {{ symbol }}</h1>
 </div>
 </body>
 </html>
