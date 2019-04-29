@@ -13,17 +13,13 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+from django.contrib import admin
 from django.urls import path
 from django.conf.urls import url, include
-from stocks.views import detail_view, index, contact
 from stocks import views
 
-
 urlpatterns = [
-	url(r'^$', views.index, name='index'),
-	url(r'home/', index, name='home'),
-	url(r'contact/', contact, name='contact'),
-	url(r'detail_view/', detail_view, name='detail_view'),
-	url('', detail_view, name='BokehJS_loader')
-	#url(r'^results/$', views.search, name='search'),
+    path('admin/', admin.site.urls),
+	url(r'^', include('stocks.urls'), name='index'),
+	url(r'^stocks/', include('stocks.urls'), name='index'),
 ]

@@ -19,7 +19,7 @@ def detail_view(request):
 		Gives details on stock symbol.
 		Parameters:
 		- Request -> Request
-		- Symbol -> Trading Symbol, such as SPX for SP500
+		- Symbol -> Trading Symbol, such as AAPL for Apple Inc.
 	"""
 	symbol = request.GET.get('usr_search')
 	template = loader.get_template('stocks/detail.html')
@@ -71,16 +71,52 @@ def detail_view(request):
 def index(request):
 	
 	template = loader.get_template('stocks/index.html')
+	"""#adding graphs of popular companies on home page. e.g AAPL, MSFT, SPY (SP500 ETF), GOOGL
+	aapl, dates_aapl, company_aapl = services.get_stock(symbol='AAPL')
+	googl, dates_googl, company_googl = services.get_stock(symbol='GOOGL')
+	msft, dates_msft, company_msft = services.get_stock(symbol='MSFT')
+	spy, dates_spy, company_spy = services.get_stock(symbol='SPY')
+								#gd for graph data													#cds for ColumnDataSource
+	aapl_close = aapl['close']; aapl_gd = pd.concat([aapl_close, dates_aapl], axis=1, sort=True); aapl_cds = ColumnDataSource(aapl_gd)
+	googl_close = googl['close']; googl_gd = pd.concat([googl_close, dates_googl], axis=1, sort=True); googl_cds = ColumnDataSource(googl_gd)
+	msft_close = msft['close']; msft_gd = pd.concat([msft_close, dates_msft], axis=1, sort=True); msft_cds = ColumnDataSource(msft_gd)
+	spy_close = spy['close']; spy_gd = pd.concat([spy_close, dates_spy], axis=1, sort=True); spy_cds = ColumnDataSource(spy_gd)
+	
+	hover = HoverTool(tooltips = [
+						('Date', '@date{%F}'),
+						('Close', '$@{close}{%0.2f}'),
+						],
+					formatters = {
+						'date': 'datetime',
+						'close': 'printf',
+					})
+	aapl_graph = figure(plot_width=800, plot_height=250, x_axis_type='datetime',
+		title = 'Closing Data of AAPL')
+	aapl_graph.line('date', 'close', color='green', alpha=.5, source=aapl_cds)
+	aapl_graph.add_tools(hover)
+	aapl_graph.title.align='center'
+	aapl_script, aapl_div = components(aapl_graph)
+	
+	default_graphs = {
+		'company_aapl': company_aapl,
+		'aapl_script': aapl_script,
+		'aapl_div': aapl_div,
+	}"""
+	context = {}
+	
+	return HttpResponse(template.render(context, request))
+	
+def contact(request):
+	template = loader.get_template('stocks/contact.html')
 	context = {}
 	return HttpResponse(template.render(context, request))
 	
-def search(request):
+"""def search(request):
 	template = loader.get_template('post_list.html')
 	
 	query = requests.GET.get('usr_search')
 	test = {
 		'test':'test'
 	}
-	
-	
-	return HttpResponse(template.render(test, request))
+
+	return HttpResponse(template.render(test, request))"""

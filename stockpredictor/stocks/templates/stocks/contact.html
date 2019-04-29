@@ -21,7 +21,6 @@
       
     
   </head>
-
 <style>
 * {box-sizing: border-box;}
 
@@ -80,7 +79,6 @@ body {
 .topnav .search-container button:hover {
 	background: #ccc;
 }
-
 body {
 	text-align: center;
 }
@@ -95,13 +93,11 @@ body {
 	padding: 10px;
 	font-size = 20px;
 }
-
 </style>
 </head>
 <body>
-<title>{{ symbol }} Data</title>
-
 <div class="topnav">
+	<title>Contact Info</title>
 	<a class="active" href="{% url 'home' %}">Home</a>
 	<a href="{% url 'home' %}">About</a>
 	<a href="{% url 'contact' %}">Contact</a>
@@ -115,44 +111,10 @@ body {
 </div>
 
 <div class="center">
-	<h1>Stock Info of {{ symbol }} ({{ company }})</h1>
-	<center>{{ div | safe }}</center>
-	
-	{{ script | safe }}
+	<p>Email: <a href="joshjandarh@gmail.com">joshjandarh@gmail</a></p>
 	<br></br>
-	<center><table>
-		<tr>
-			<th>Last Trading Day Open</th>
-			<th>${{ today_open }}</th>
-		</tr>
-		<tr>
-			<th>Last Trading Day Close</th>
-			<th>${{ today_close }}</th>
-		</tr>
-		<tr>
-			<th>Last Trading Day Low</th>
-			<th>${{ today_low }}</th>
-		</tr>
-		<tr>
-			<th>Last Trading Day High</th>
-			<th>${{ today_high }}</th>
-		</tr>
-		<tr>
-			<th>Volume of Last Trading Day</th>
-			<th> {{ today_volume }}</th>
-		</tr>
-			<th>10 Day Volatility</th>
-			<th> {{ current_volatility }}</th>
-		</tr>
-		<tr>
-			<th>Percentage Change from Day Before</th>
-			<th> {{ one_day_percent_change }}%</th>
-		</tr>
-	</table></center>
-	<br></br>
-	<footer>
-		Data provided for free by <a href="https://iextrading.com/developer">IEX</a>. View <a href=https://iextrading.com/api-exhibit-a/">IEX’s Terms of Use</a>.
-	</footer>
+	<p>Github: <a href="https://github.com/joshjanda1">github.com/joshjanda1</a></p>
+
 </div>
 </body>
 </html>
