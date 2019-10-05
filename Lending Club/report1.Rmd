@@ -2,7 +2,9 @@
 title: "Lending Club - Predicting Defaults on Loans"
 author: "Josh Janda"
 date: "September 4, 2019"
-output: pdf_document
+output:
+  pdf_document:
+    dev: png
 ---
 
 ```{r setup, include=FALSE}
@@ -26,7 +28,7 @@ For my project, I will be evaluating the Lending Club loan dataset. In specific,
 
 While there are many more variables, 145 to be exact, I believe these are some of the most important features that will help predict whether or not a loan will default.
 
-Moving onto our target variable, we will be trying to predict:
+Moving onto our target (independent) variable, we will be trying to predict:
 
 - *loan_status*: Current status of the loan
 
@@ -36,9 +38,15 @@ Now that we have introduced the data and our goal for it, we will want to load t
 
 ```{r include=FALSE}
 library(vroom)
+library(boot)
+library(broom)
 library(ggplot2)
 library(knitr)
 library(tidyverse)
+library(zoo)
+library(caret)
+library(dataPreparation)
+library(e1071)
 ```
 
 
@@ -105,7 +113,10 @@ Let's clean the data a little bit now by removing all rows that have any of the 
 
 lending_data_target_clean = lending_data %>% filter(
   loan_status %ni% c("Current", "In Grace Period", "Late (16-30 days)", "Late (31-120 days)"))
+
+rm(list = setdiff(ls(), "lending_data_target_clean"))
 total_obs2 = nrow(lending_data_target_clean)
+ # clear environment
 ```
 
 With those values of *loan_status* removed, we have shrunken the data to only `r total_obs2` rows, which is much smaller and more manageable. Let's take a look at a bar plot of *loan_status* once again.
@@ -127,6 +138,7 @@ This plot looks much cleaner with the redudant levels of *loan_status* removed. 
 lending_data_target_clean$loan_status_final = ifelse(
   lending_data_target_clean$loan_status %in% c("Charged Off",
     "Default", "Does not meet the credit policy. Status:Charged Off"), "Default", "Not Default")
+lending_data_target_clean = lending_data_target_clean[, !(names(lending_data_target_clean) %in% c("loan_status"))]
 ```
 
 Let's take a look at the bar graph one more time for our created variable *loan_status_final*.
@@ -175,7 +187,7 @@ With summary statistics aside, let's take a look at the histogram of *annual_inc
 
 ```{r}
 ggplot(lending_data_target_clean, aes(x = annual_inc)) +
-  geom_histogram(stat = "bin", bins = 100, color = "blue") +
+  geom_histogram(stat = "bin", bins = 1000, color = "blue") +
   xlab("Annual Income") +
   ylab("Number of Observations") +
   ggtitle("Histogram of Annual Income") +
@@ -310,3 +322,1880 @@ ggplot(lending_data_target_clean, aes(x = loan_status_final, y = loan_amnt, colo
 Looking at the plot above, we can see that the loan amounts between each group does not have a huge difference. The outliers start at about the same amount of 37,000. However, the mean loan amount for the "Not Default" group is about 2,000 lower. The spread of the observations in the "Not Default" group is a little bit larger though. 
 
 All in all, I believe that these three variables will play an important role in predicting whether or not someone will default on their loan. This is shown through summary statistics, visualizations of variables, as well as box-plots between each variable and the target variable *loan_status*. 
+
+##Data Cleaning
+
+With our initial target variable exploration and three important variables aside, we will now dive deeper into the dataset by exploring all variables. Recall that there are 145 variables in this dataset, which I plan to reduce through exploration.
+
+**Missing Values**
+
+For starters, let's get a look at the total number of variables that contain NA values. 
+
+```{r}
+total_vars_with_na = length(colnames(lending_data_target_clean)
+                            [colSums(is.na(lending_data_target_clean)) > 0])
+```
+
+Our Lending Club data has `r total_vars_with_na` variables that have at least one NA value. This is a large amount of variables, so let's get some of the most obvious ones out of the way first. I am going to set a rule beforehand that any variable that has more than half of the rows as NA as a redundant variable and therefore will be removed. I am setting this rule as if there is over half the data missing it will cause more harm to our model accuracy due to having to do mass data imputation which could end up being innacurate. Let's filter the data and display all variables being removed. 
+
+
+```{r}
+cols_being_removed = colnames(lending_data_target_clean)[colSums(
+  is.na(lending_data_target_clean)) > nrow(lending_data_target_clean) / 2]
+colnames(lending_data_target_clean)[colSums(
+  is.na(lending_data_target_clean)) > nrow(lending_data_target_clean) / 2]
+```
+
+Now, let's remove the variables.
+
+```{r}
+lending_data_vars_rem = lending_data_target_clean[, !(names(
+  lending_data_target_clean) %in% cols_being_removed)]
+
+rm(list = setdiff(ls(), "lending_data_vars_rem"))
+
+total_vars_3 = ncol(lending_data_vars_rem)
+```
+
+With those variables removed, we are left with `r total_vars_3` in our data. Let's continue our exploration.
+
+**Categorical / Text Variable**
+
+With missing values put aside and our number of variables drastically reduced, let's now focus on categorical / text variables and see which variables will be of most use for our end goal of predicting whether or not someone will default on their loan.
+
+```{r}
+total_char_vars = length(lending_data_vars_rem
+                         %>% select_if(is.character))
+```
+
+
+There are a total of `r total_char_vars` in our data. Let's take a look at each of these variables.
+
+```{r}
+colnames(lending_data_vars_rem %>% select_if(is.character))
+```
+
+Let's go through each variable and give a quick description of it.
+
+- *term* - The number of payments on the loan. Values are in months and can be either 36 or 60.
+- *grade* - Lending Club assigned loan grade
+- *sub_grade* - Lending Club assigned loan subgrade
+- *emp_title* - The job title supplied by the Borrower when applying for the loan.*
+- *emp_length* - Employment length in years. Possible values are between 0 and 10 where 0 means less than one year and 10 means ten or more years.
+- *home_ownership* - The home ownership status provided by the borrower during registration. Our values are: RENT, OWN, MORTGAGE, OTHER.
+- *verification_status* - Indicates if income was verified by LC, not verified, or if the income source was verified
+- *issue_d* - The month which the loan was funded
+- *pymnt_plan* - Indicates if a payment plan has been put in place for the loan
+- *purpose* - A category provided by the borrower for the loan request.
+- *title* - The loan title provided by the borrower
+- *zip_code* - The first 3 numbers of the zip code provided by the borrower in the loan application.
+- *addr_state* - The state provided by the borrower in the loan application
+- *earliest_cr_line* - The month the borrower's earliest reported credit line was opened
+- *initial_list_status* - The initial listing status of the loan. Possible values are - W, F
+- *last_pymt_d* - Last month payment was received
+- *last_credit_pull_d* - The most recent month Lending Club pulled credit for this loan
+- *application_type* - Indicates whether the loan is an individual application or a joint application with two co-borrowers
+- *hardship_flag* - Flags whether or not the borrower is on a hardship plan
+- *disbursement_method* - The method by which the borrower receives their loan. Possible values are: CASH, DIRECT_PAY
+- *debt_settlement_flag* - Flags whether or not the borrower, who has charged-off, is working with a debt-settlement company.
+- *loan_status_final* - Loan status of the borrower. Can be Default or Not Default.
+
+Now that we have an idea of what each of these text variables are, let's go through each and see what can be done with it and how it correlates with whether or not someone will default on their loan.
+
+I will start by making a quick summary function for each variable.
+
+```{r}
+summary_func = function(variable) {
+  levels = unique(lending_data_vars_rem[, variable])
+  number_nas = sum(is.na(lending_data_vars_rem[, variable]))
+  if (nrow(levels) >= 30) {
+    summary_df = data.frame("Number of Levels" = nrow(levels),
+                            "Number of NA's" = number_nas
+                          )
+    kable(summary_df)
+  }else{
+    summary_df = data.frame("Levels" = levels,
+                            "Number of NA's" = number_nas
+                          )
+    kable(summary_df)
+  }
+}
+```
+
+
+*Term*, is an assigned variable by Lending Club. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("term")
+```
+
+So, we can see that *term* takes on two levels which are `36 months` and `60 months`. Also, *term* contains no missing values. This variable will be useful for predicting whether or not someone will default on their loan as I believe those with more payments (60 months), will be more likely to not fully pay back their loan. Let's take a look at a grouped barplot to see how the Default and Not Default observations differ between each level of *term*.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(term, loan_status_final))
+ggplot(freq_table, aes(factor(term), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Terms", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Term Levels") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+default_rate_36_month = freq_table$n[1]/(sum(lending_data_vars_rem$term == "36 months"))
+default_rate_60_month = freq_table$n[3]/(sum(lending_data_vars_rem$term == "60 months"))
+def_rate_60to30 = default_rate_60_month / default_rate_36_month
+```
+
+So, we can see above that a majority of the loans have a term for 36 months. Between each term, 36 and 60 months, we can see that ther number of defaults is between 150,000 and 175,000. However, since the majority of loans are 36 months we can say that the rate of defaults on 60 month term loans is much higher than the rate of defaults on a 36 month term loan. The default rate of 36 month loans is `r default_rate_36_month` and the default rate of 60 month loans is `r default_rate_60_month`, so the default rate of 60 month loans is `r def_rate_60to30` times as much which is much higher. This confirms my belief that those with 60 month terms are more likely to default on their loan.
+
+*Grade*, is an assigned variable by Lending Club. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("grade")
+```
+
+
+So, we can see that *grade* takes on 7 levels which are `A, B, C, D, E, F, G`. Also, *grade* contains no missing values. This variable will be useful for predicting whether or not someone will default on their loan as loans with worse grades (G being the worst), the more likely someone will default on their loan. Let's take a look at a grouped barplot to see how the Default and Not Default observations differ between each level of *grade*.
+
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(grade, loan_status_final))
+ggplot(freq_table, aes(factor(grade), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Loan Grades", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Loan Grades") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+As we can see above, the loan grade with the most amount of loans is B. Looking at the number of defaults between each loan grade, we can see that as the loan grade worsens the default rate increases. When we get to loan grades F and G, the default rate is near 50%. This confirms my belief that as the loan grades worsen, the borrower is less likely to repay their loan and therefore will default on it.
+
+*Sub_Grade*, is an assigned variable by Lending Club. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("sub_grade")
+```
+
+There are 35 levels in the *sub_grade* variable. This is because for each grade loan, there are 5 sub-grades in that loan grade. This variable will be useful for predicting loan default as sub-grades within loan grades also are a good predictor of how risky someone and therefore the chance they may default on their loan. Let's take a look at a grouped barplot to see how the Default and Not Default observations differ between each level of *sub_grade*.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(sub_grade, loan_status_final))
+ggplot(freq_table, aes(factor(sub_grade), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Loan Sub-Grades", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Loan Sub-Grades") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Similiarly to the barplot above of *grade*, we can see that borrowers with a loan sub-grade between B1-B5 are the most common. Also similiarly to above, as the loan sub-grade worsens the default rate of loans is near 50%. This confirms my belief that as the loan grade and sub-grade worsens, the more risky a borrower is and therefore the higher chance that they default on their loan.
+
+*Emp_Title*, is a user-entered variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("emp_title")
+```
+
+There are 355,809 levels this variable can take. There are also 82,715 missing values of this variable in our dataset. While employment titles are important, I do not believe they will be of much use for our end goal of predicting loan default. Also, being that this variable is entered in by the borrower, we cannot trust that all values are accurate and we are better off removing this variable.
+
+*Emp_Length*, is a user-entered variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("emp_length")
+```
+
+There are 12 levels this variable can take, being from less than 1 year all the way to 10+ years as well as an 'n/a' variable. While they are not explicitly missing, there are actually `r sum(lending_data_vars_rem$emp_length == 'n/a')` missing values of this variable in our dataset. While employment length is important, I do not believe it will be of much use for our end goal of predicting loan default. Also, being that this variable is entered in by the borrower, we cannot trust that all values are accurate and we are better off removing this variable.
+
+*Emp_Length*, is a user-entered variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("home_ownership")
+```
+
+There are 6 levels this variable can take, which are `mortgage, rent, own, any, none, and other`. While there are no true NA values, we must take note of the levels `any`, `none`, and `other`. Since these levels are ambiguous, I believe that this variable should be removed to prevent confusion later on. Also, being that this variable is user-entered we cannot trust it's accuracy. 
+
+*Verification_status*, is a Lending Club assigned variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("verification_status")
+```
+
+There are 3 levels this variable can take, which are `source verified`, `verified`, and `not verified`. Since income is an important factor on whether someone will default on their loan or not, I believe it is important if the borrower has had their income verified. I believe that those who have not had their income verified will be more likely to default on their loan. Let's take a look at a grouped barplot to see how the Default and Not Default observations differ between each level of *verification_status*.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(verification_status, loan_status_final))
+ggplot(freq_table, aes(factor(verification_status), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Verification Status", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Income Verification Status") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+From the looks of the graph, it seems that those who have had their income verified are actually more likely to default on their loan. I believe this variable will be useful in predicting whether or not someone will default on their loan.
+
+*Issue_d*, is a Lending Club assigned variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("issue_d")
+```
+
+Unsurprisingly, there are a large amount of levels for this variable as it is the issue date of the loan. My belief is that the issue date will have no correlation to whether or not someone will default on their loan as the month a loan was issued should not be a cause of loan default. I will be removing this variable.
+
+*Pymnt_plan*, is a Lending Club assigned variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("pymnt_plan")
+```
+
+This variable takes on one level, `n`, which indicates that the borrower is not on a payment plan for the loan. Since this payment plan is for borrowers who are behind on their loan, this variable will not be useful for us as we are only analyzing loans that are defaulted on, charged off, or fully paid. I will be removing this variable.
+
+*Purpose*, is a user-entered variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("purpose")
+```
+
+This variable takes on 14 levels, which cover different areas of purposes for their loan. I believe this variable will indeed play a role in predicting loan default as those who are taking out loans to consolidate debt or pay off credit cards may be at more risk of default. Let's look at a grouped bar plot to see the default rate between levels of this variable.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(purpose, loan_status_final))
+ggplot(freq_table, aes(factor(purpose), n, fill = factor(purpose), color = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Purpose", y = "Count", fill = "Purpose",
+       title = "Count of Defaults and Not Defaults between Loan Purposes",
+       color = "Loan Status") +
+  theme(axis.text.x = element_blank(), plot.title = element_text(hjust = 0.5))
+```
+
+We can see that the most popular purposes for a borrowers loan are credit card debt and debt consolidation. Both of these purposes have a large amount of defaults compared to the other purposes. Overall, I believe that purposes will play a role in predicting loan default.
+
+*Title*, is a user-entered variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("title")
+```
+
+There are 61,453 levels in this variable and 15,425 NA values. Since this variable is user-entered and is just the "title" of their loan, I do not believe it will play an important role in predicting loan default so I will be removing this variable.
+
+*Zip_code*, is a user-entered variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("zip_code")
+```
+
+While I do believe location will play a role in predicting loan default, I do not believe zip codes will be as important as states. With 946 levels of zip codes, I believe we should focus on states instead. I will be removing this variable.
+
+*Addr_state*, is a user-entered variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("addr_state")
+```
+
+There are 51 levels in this variable, which makes sense since there are 50 states as well as Washington DC. There are no NA values. For this variable, I will be creating a new variable that corresponds to the region of the United States instead of the actual state. Let's begin this process.
+
+```{r}
+west_region = c("WA", "OR", "CA", "NV", "UT", "HI", "AK", "CO",
+                "WY", "MT", "ID")
+southwest_region = c("AZ", "NM", "TX", "OK")
+midwest_region = c("ND", "SD", "NE", "KS", "MN", "IA", "MO",
+                   "WI", "IL", "IN", "MI", "OH")
+southeast_region = c("AR", "LA", "MS", "AL", "TN", "FL", "GA",
+                     "SC", "NC", "VA", "DC", "KY", "WV")
+northeast_region = c("MD", "PA", "NY", "DE", "NJ", "CT", "RI",
+                     "MA", "NH", "VT", "DC", "ME")
+
+lending_data_vars_rem$state_regions = ifelse(
+  lending_data_vars_rem$addr_state %in% west_region, "West",
+  ifelse(lending_data_vars_rem$addr_state %in% southwest_region, "Southwest",
+         ifelse(lending_data_vars_rem$addr_state %in% midwest_region, "Midwest",
+                ifelse(lending_data_vars_rem$addr_state %in% southeast_region, "Southeast", "Northeast")))
+)
+```
+
+With the new variable created, let's remove the old variable *addr_state* and then take a look at the grouped bar plot to see default rates between regions.
+
+```{r}
+lending_data_vars_rem = lending_data_vars_rem[, !(names(lending_data_vars_rem) %in% c("addr_state"))]
+
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(state_regions, loan_status_final))
+ggplot(freq_table, aes(factor(state_regions), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Region", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Regions in United States") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Looking at the plot above, all regions have a similiar number of defaults. The region that seems to have the largest default rate is the Southwest, which includes states such as Texas. Overall, there does not seem to be much of a difference between default rates of regions but I believe that location will still play a role in predicting loan defaults so I will be keeping this variable.
+
+*Earliest_cr_line*, is a Lending Club assigned variable in this dataset. Let's use our summary function to get a list of all values this variable can take.
+
+```{r}
+summary_func("earliest_cr_line")
+```
+
+Since this variable represents the month that the earliest credit line was opened for the borrower, we can therefore figure out how old their earliest credit line is. Since this is important for assessing risk of a borrower, I believe it will play a role in predicting loan default. I will be converting this variable to a numeric one which gives us the number of days old the borrowers credit line is. To avoid potentional modeling discrepancies later, I will be measuring the age from the date of December 31st, 2015 since that is when this data is through. I will then drop the original *earliest_cr_line* variable.
+
+```{r}
+lending_data_vars_rem$earliest_cr_line_fixed = as.Date(paste("01", lending_data_vars_rem$earliest_cr_line), format = "%d %b-%Y")
+lending_data_vars_rem = select(lending_data_vars_rem, -c(earliest_cr_line)) #drop variable
+end_of_data_date = as.Date("2015-12-31", format = "%Y-%m-%d")
+
+lending_data_vars_rem$credit_age = end_of_data_date - lending_data_vars_rem$earliest_cr_line_fixed
+```
+
+We now have the variable *credit_age* which gives us the length of their earliest credit line in days. With this new variable created, we need to now focus on the NA values we have. I will be replacing all NA values with the mean of the *credit_age* variable, and then finally converting this variable to a numeric type and removing our original variabe *earliest_cr_line*.
+
+```{r}
+credit_age_mean = mean(lending_data_vars_rem$credit_age, na.rm = TRUE)
+
+lending_data_vars_rem$credit_age = na.aggregate(lending_data_vars_rem$credit_age)
+lending_data_vars_rem$credit_age = as.numeric(lending_data_vars_rem$credit_age)
+lending_data_vars_rem = lending_data_vars_rem[, !(names(lending_data_vars_rem) %in% c("earliest_cr_line", "earliest_cr_line_fixed"))]
+
+```
+
+
+*Initial_list_status* is a Lending Club assigned variable. Let's take a look at the summary function output to see the levels of this variable.
+
+```{r}
+summary_func("initial_list_status")
+```
+
+The two levels for *initial_list_status* are `w`, and `f`. These stand for `whole`, and `fractional`. Whole loans are loans that can be purchased by investors in their entirety. Fractional loans are loans that are able to be purchased by investors in fractions. Let's look at the grouped bar plot for this variable.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(initial_list_status, loan_status_final))
+ggplot(freq_table, aes(factor(initial_list_status), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Initial List Status", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Initial Listing Status") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Looking at the bar plot, there is not much of a difference in default rates between groups. Due to this variable being meant for investors to analyze a loan, I do not believe this variable will be of relevance to our goal of predicting loan default. I will be removing this variable.
+
+*Last_pymnt_d* is a Lending Club assigned variable. Let's take a look at the summary function output to see the levels of this variable.
+
+```{r}
+summary_func("last_pymnt_d")
+```
+
+There are 136 levels in this variable and 2273 NA values. Since this variable is associated with being late on a loan, I do not believe it will be useful for predicting a default on a loan. I will be removing this variable.
+
+*Last_credit_pull_d* is a Lending Club assigned variable. Since this variable is associated with the last time Lending Club pulled the credit on a borrower, I do not believe it will be of much use for predicting loan default. I will be removing this variable.
+
+*Application_type* is a Lending Club assigned variable. Let's take a look at the summary function output to see the levels of this variable.
+
+```{r}
+summary_func("application_type")
+```
+
+There are two levels in this variable, `Joint App` or `Individual`, where Joint App is a joint application with two co-borrowers and an individual application is with one borrower. Let's take a look at the grouped bar plot.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(application_type, loan_status_final))
+ggplot(freq_table, aes(factor(application_type), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Application Type", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Application Types") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Looking at the plot above, the application type observations are very imbalanced. Joint application loans are very uncommon in our data. The default rates are very similiar between groups, with individual having a default rate of .25 and joint app having a default rate of .33. Since these are very similiar, with account of imbalanced observations between groups, I will be removing this variable.
+
+*Hardship_flag* is a Lending Club assigned variable. Let's take a look at the summary function output to see the levels of this variable.
+
+```{r}
+summary_func("hardship_flag")
+```
+
+There are two levels in this variable, `Y` or `N`, indicating yes or no. A hardship flag indicates that the borrower is in a hardship program, which is mostly used for catching up on debt by waived interest fees. Let's look at a grouped bar plot.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(hardship_flag, loan_status_final))
+ggplot(freq_table, aes(factor(hardship_flag), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Hardship Flag", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Hardship Flags") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Once again, we can see right away that the variable is very imbalanced. Digging deeper into the graph, there is actually only `r freq_table[3,3]` observation for the `Y` group. With this huge imbalance, this variable will not be helpful and I will be removing it.
+
+*Disbursement_method* is a Lending Club assigned variable. Let's take a look at the summary function output to see the levels of this variable.
+
+```{r}
+summary_func("disbursement_method")
+```
+
+There are two levels in this variable, `Cash` or `DirectPay`. The cash level means the borrower received the money from their loan. The direct pay level means that borrowers are using up to 80% of their loan for debt right away. Let's take a look at a grouped bar plot.
+
+```{r}
+options(scipen = 10)
+freq_table = as.data.frame(lending_data_vars_rem %>% count(disbursement_method, loan_status_final))
+ggplot(freq_table, aes(factor(disbursement_method), n, fill = loan_status_final)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Disbursement Method", y = "Count", fill = "Loan Status",
+       title = "Count of Defaults and Not Defaults between Disbursement Methods") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Once again, we see that this variable is affected by highly imbalanced observations. Only `r freq_table[3,3] + freq_table[4, 3]` observations have received a `DirectPay` loan. With this much of an imbalance, I will be removing this variable.
+
+*Debt_settlement_flag* is a Lending Club assigned variable. Let's take a look at the levels with the summary function.
+
+```{r}
+summary_func("debt_settlement_flag")
+```
+
+
+This variable indicates whether or not the borrower, who has already defaulted on their loan, is working with a debt-settlement company. Therefore, it is safe to say that this variable will not be of use as the observations that are in Debt Settlement have already defaulted. 
+
+That is the end of the categorical variable review. For each variable, we have taken a look at the levels and total NA values and justified whether each variable was useful or not through visualizations. We have created new variables, as well as removed some. Let's go ahead and remove those that need to be removed now.
+
+```{r}
+remove_list = c("emp_title",
+                "emp_length",
+                "home_ownership",
+                "issue_d",
+                "pymnt_plan",
+                "title",
+                "zip_code",
+                "initial_list_status",
+                "last_credit_pull_d",
+                "application_type",
+                "hardship_flag",
+                "disbursement_method",
+                "debt_settlement_flag",
+                "last_pymnt_d")
+
+lending_data_vars_rem = lending_data_vars_rem[, !(names(lending_data_vars_rem) %in% remove_list)]
+total_char_vars_final = length(lending_data_vars_rem %>% select_if(is.character))
+```
+
+Overall, we have reduced our number of categorical variables from `r total_char_vars` to `r total_char_vars_final`.
+
+**Numerical Variables**
+
+In this section, we will be taking a look at all variables that are of type numeric. Let's get a quick look at a list of all these variables.
+
+```{r}
+total_num_vars = length(lending_data_vars_rem %>% select_if(is.numeric))
+```
+
+
+There are a total of `r total_num_vars` numeric variables in our data. Let's take a look at each of these variables.
+
+```{r}
+numeric_vars = lending_data_vars_rem %>% select_if(is.numeric)
+colnames(lending_data_vars_rem %>% select_if(is.numeric))
+```
+
+For numeric variables, we are only going to be worrying about columns with NA values. Let's take care of missing values first. After that, we will be normalizing the data to prevent drastic effects from outliers in the data.
+
+We will first start with variables with over 100,000 missing values. Doing mass imputation on these variables can sway our results, so I believe that keeping these variables will hurt our model accuracy more than help it.
+
+```{r}
+num_over_100k_missing = colnames(numeric_vars)[colSums(is.na(numeric_vars)) > 100000]
+num_over_100k_missing
+```
+
+The variables with over 100,000 missing values are `mo_sin_old_il_acct`, `mths_since_recent_inq`, and `num_tl_120dpd_2m`. These variables represents the number of months since oldest bank installment account opened, number of months since most recent inquiry, and the number of accounts currently 120 days past due. These variables do not seem of much relevance to our end goal as well, so let's remove them.
+
+```{r}
+lending_data_vars_rem = lending_data_vars_rem[, !(names(lending_data_vars_rem) %in% 
+                                                    num_over_100k_missing)]
+```
+
+Now, let's look at variables with over 50,000 missing values. While doing imputation on this number of missing values isn't as bad, it can still sway our model and cause more harm than good. Let's go through them and see which ones should definitely be removed.
+
+```{r}
+numeric_vars = lending_data_vars_rem %>% select_if(is.numeric)
+num_over_50k_missing = colnames(numeric_vars)[colSums(is.na(numeric_vars)) > 50000]
+num_over_50k_missing
+```
+
+There are quite a few of these variables. Let's quick a get summary of each and see if they are worth keeping.
+
+- "tot_coll_amt" - Total collection amounts ever owed
+- "tot_cur_bal" - Total current balance of all accounts
+- "total_rev_hi_lim" - Total revolving high credit/credit limit
+- "acc_open_past_24mths" - Number of trades opened in past 24 months.
+- "avg_cur_bal" - Average current balance of all accounts
+- "bc_open_to_buy" - Total open to buy on revolving bankcards.
+- "bc_util" - Ratio of total current balance to high credit/credit limit for all bankcard accounts.
+- "mo_sin_old_rev_tl_op" - Months since oldest revolving account opened
+- "mo_sin_rcnt_rev_tl_op" - Months since most recent revolving account opened
+- "mo_sin_rcnt_tl" - Months since most recent account opened
+- "mort_acc" - Number of mortgage accounts.
+- "mths_since_recent_bc" - Months since most recent bankcard account opened.
+- "num_accts_ever_120_pd" - Number of accounts ever 120 or more days past due
+- "num_actv_bc_tl" - Number of currently active bankcard accounts
+- "num_actv_rev_tl" - Number of currently active revolving trades
+- "num_bc_sats" - Number of satisfactory bankcard accounts
+- "num_bc_tl" - Number of bankcard accounts
+- "num_il_tl" - Number of installment accounts
+- "num_op_rev_tl" - Number of open revolving accounts
+- "num_rev_accts" - Number of revolving accounts
+- "num_rev_tl_bal_gt_0" - Number of revolving trades with balance >0
+- "num_sats" - Number of satisfactory accounts
+- "num_tl_30dpd" - Number of accounts currently 30 days past due (updated in past 2 months) - These borrowers are late on their loans, so not relevant.
+- "num_tl_90g_dpd_24m" - Number of accounts 90 or more days past due in last 24 months - These borrowers are late on their loans, so not relevant.
+- "num_tl_op_past_12m" - Number of accounts opened in past 12 months
+- "pct_tl_nvr_dlq" - Percent of trades never delinquent
+- "percent_bc_gt_75" - Percentage of all bankcard accounts > 75% of limit.
+- "tot_hi_cred_lim" - Total high credit/credit limit
+- "total_bal_ex_mort" - Total credit balance excluding mortgage
+- "total_bc_limit" - Total bankcard high credit/credit limit
+- "total_il_high_credit_limit" - Total installment high credit/credit limit
+
+Looking at these variable descriptions, a lot of these variables are very similar. Let's take a look at the groups of variables that are similar to one another. We will first start with variables *mo_sin_rcnt_rev_tl_op*, *mo_sin_rcnt_rev_tl_op*, and *mths_since_recent_bc*. These three variables are all related to the number of months since most recent account opened, type of account varying. Let's take a look at their box plot to see if their distributions are similar between default groups.
+
+```{r}
+plot_mo_revolving = ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = mo_sin_rcnt_rev_tl_op, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Months Since Most Recent Revolving Account Opened",
+       title = "Box-Plot of Loan Amount and\n
+       # Months Since Most Recent Revolving Account Opened",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+plot_mo_recent = ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = mo_sin_rcnt_tl, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Months Since Most Recent Account Opened",
+       title = "Box-Plot of Loan Amount and\n
+       # Months Since Most Recent Account Opened",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+means = aggregate(mths_since_recent_bc ~ loan_status_final, lending_data_vars_rem, mean)
+plot_mo_bc = ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = mths_since_recent_bc, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Months Since Most Recent Bankcard Opened",
+       title = "Box-Plot of Loan Amount and\n
+       # Months Since Most Recent Bankcard Opened",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+plot_mo_revolving
+plot_mo_recent
+plot_mo_bc
+
+```
+
+Looking at the box plots for all three of these variables, we can see right away that all their distributions are very similar. We can also see that for all three varaibles, the mean and spread between the `Default` and `Not Default` groups are almost identical. This leads me to believe that these variables will not be very useful. Just to be sure, let's take a quick look at summary statistics before removing the variables.
+
+```{r}
+means1 = aggregate(mths_since_recent_bc ~ loan_status_final, lending_data_vars_rem, mean)
+means2 = aggregate(mo_sin_rcnt_tl ~ loan_status_final, lending_data_vars_rem, mean)
+means3 = aggregate(mo_sin_rcnt_rev_tl_op ~ loan_status_final, lending_data_vars_rem, mean)
+means_mo_rec = cbind(means1, means2[2], means3[2])
+kable(means_mo_rec, col.names = c("Loan Status",
+                                  "Mean Recent BC",
+                                  "Mean Recent Acc",
+                                  "Mean Recent Revolving Acc"))
+
+sd1 = aggregate(mths_since_recent_bc ~ loan_status_final, lending_data_vars_rem, sd)
+sd2 = aggregate(mo_sin_rcnt_tl ~ loan_status_final, lending_data_vars_rem, sd)
+sd3 = aggregate(mo_sin_rcnt_rev_tl_op ~ loan_status_final, lending_data_vars_rem, sd)
+sd_mo_rec = cbind(sd1, sd2[2], sd3[2])
+kable(sd_mo_rec, col.names = c("Loan Status",
+                                  "SD Recent BC",
+                                  "SD Recent Acc",
+                                  "SD Recent Revolving Acc"))
+```
+
+So, confirming with our belief from the box-plots, there is not much of a difference between groups in these three variables to be useful in our model. I will be removing these variables.
+
+
+Next, let's take a look at the similar variables relating to the number of accounts a borrower has. These variables are *acc_open_past_24mths*, *num_actv_bc_tl*, *num_actv_rev_tl*, *num_bc_sats*, *num_bc_tl*, *num_il_tl*, *num_op_rev_tl*, *num_rev_accts*, *num_rev_tl_bal_gt_0*, *num_sats num_tl_op_past_12m*. The descriptions of these variables can be found above at the beginning of the section. Let's first take a look at all of their box plots.
+
+```{r}
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = acc_open_past_24mths, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Trades Opened in Past 24 Months",
+       title = "Box-Plot of Loan Amount and\n
+       # Trades Opened in Past 24 Months",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_actv_bc_tl, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Currently Active Bankcard Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Currently Active Bankcard Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_actv_rev_tl, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Currently Active Revolving Trades",
+       title = "Box-Plot of Loan Amount and\n
+       # Currently Active Revolving Trades",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_bc_sats, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Satisfactory Bankcard Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Satisfactory Bankcard Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_bc_tl, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Bankcard Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Bankcard Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_il_tl, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Installment Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Installment Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_op_rev_tl, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Open Revolving Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Open Revolving Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_rev_accts, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Revolving Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Revolving Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_rev_tl_bal_gt_0, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Revolving Trades w/ Balance > 0",
+       title = "Box-Plot of Loan Amount and\n
+       # Revolving Trades w/ Balance > 0",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_sats, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Satisfactory Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Satisfactory Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_tl_op_past_12m, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Accounts Opened in Past 12 Months",
+       title = "Box-Plot of Loan Amount and\n
+       # Accounts Opened in Past 12 Months",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+```
+
+Looking at the box-plots of all of these variables, we can see that their distributions are very similar and have similar means and spreads for both groups. Let's move forward to combining these variables into one variable, *num_accs*, which will be equal to the total number of accounts a borrower has. This will be created by adding together each of these variables.
+
+```{r}
+num_accs = lending_data_vars_rem$acc_open_past_24mths +
+  lending_data_vars_rem$num_actv_bc_tl +
+  lending_data_vars_rem$num_actv_rev_tl +
+  lending_data_vars_rem$num_bc_sats +
+  lending_data_vars_rem$num_bc_tl +
+  lending_data_vars_rem$num_il_tl +
+  lending_data_vars_rem$num_op_rev_tl +
+  lending_data_vars_rem$num_rev_accts +
+  lending_data_vars_rem$num_rev_tl_bal_gt_0 +
+  lending_data_vars_rem$num_sats +
+  lending_data_vars_rem$num_tl_op_past_12m
+
+lending_data_vars_rem$num_accs = num_accs
+```
+
+Let's now take a look at the box-plot for this new variable.
+
+```{r}
+ggplot(lending_data_vars_rem, aes(x = loan_status_final, y = num_accs, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "# Accounts",
+       title = "Box-Plot of Loan Amount and\n
+       # Accounts",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+```
+
+With this combined accounts variable, we can see that the distribution stayed relatively the same as all of the other variables. Now, let's take care of the missing values. This variable has `r sum(is.na(lending_data_vars_rem$num_accs))` missing values which we must fill. Let's take a look at the histogram of this variable to see if we should impute the mean or median for missing values.
+
+```{r}
+num_accs_mean = mean(num_accs, na.rm = TRUE)
+num_accs_median = median(num_accs, na.rm = TRUE)
+ggplot(lending_data_vars_rem, aes(x = num_accs)) +
+  geom_histogram(stat = "bin", bins = 50, color = "blue") +
+  geom_vline(aes(xintercept = num_accs_mean,
+             color = "Mean")) +
+  geom_vline(aes(xintercept = num_accs_median,
+             color = "Median")) +
+  xlab("Number of Accounts") +
+  ylab("Number of Observations") +
+  ggtitle("Histogram of # of Accounts") +
+  theme(plot.title = element_text(hjust = 0.50)) +
+  scale_color_manual(name = "Summary Stats",
+                     labels = c("Mean", "Median"),
+                     values = c("red", "green"))
+```
+
+Looking at the histogram, I believe our best method of imputation will be the mean as it is most centered with the data. Let's go ahead and impute these missing values.
+
+```{r}
+lending_data_vars_rem$num_accs[
+  is.na(lending_data_vars_rem$num_accs)] = num_accs_mean
+```
+
+With the new variable created and missing values filled, let's move on to the next similar set of variables. These variables are *total_rev_hi_lim*, *tot_hi_cred_lim*, *total_bc_limit*, and *total_il_high_credit_limit*. These variables are all related to the total high credit/credit limits of accounts. Let's take a look at the box-plots for each variable.
+
+```{r}
+ggplot(lending_data_vars_rem, aes(x = loan_status_final,
+        y = total_rev_hi_lim, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "Total Revolving High Credit/Credit Limit",
+       title = "Box-Plot of Loan Amount and\n
+       Total Revolving High Credit/Credit Limit",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final,
+         y = tot_hi_cred_lim, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "Total High Credit/Credit Limit",
+       title = "Box-Plot of Loan Amount and\n
+       Total High Credit/Credit Limit",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final,
+          y = total_bc_limit, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "Total Bankcard High Credit/Credit Limit",
+       title = "Box-Plot of Loan Amount and\n
+       Total Bankcard High Credit/Credit Limit",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+
+ggplot(lending_data_vars_rem, aes(x = loan_status_final,
+  y = total_il_high_credit_limit, color = loan_status_final)) +
+  geom_boxplot(outlier.colour = "black") +
+  labs(x = "Loan Status",
+       y = "Total Installment High Credit/Credit Limit",
+       title = "Box-Plot of Loan Amount and\n
+       Total Installment High Credit/Credit Limit",
+       color = "Loan Status") +
+  theme(plot.title = element_text(hjust = 0.50))
+```
+
+Looking at the plots, these variables have similar distributions between each group of loan status. However, the means and spreads between each group seem very similar and therefore could not be useful in predicting loan default. Let's get a numerical summary of each variable.
+
+```{r}
+means1 = aggregate(total_rev_hi_lim ~ loan_status_final, lending_data_vars_rem, mean)
+means2 = aggregate(tot_hi_cred_lim ~ loan_status_final, lending_data_vars_rem, mean)
+means3 = aggregate(total_bc_limit ~ loan_status_final, lending_data_vars_rem, mean)
+means4 = aggregate(total_il_high_credit_limit ~ loan_status_final, lending_data_vars_rem, mean)
+means_mo_rec = cbind(means1, means2[2], means3[2], means4[2])
+kable(means_mo_rec, col.names = c("Loan Status",
+                                  "Mean Revolving HC/CL",
+                                  "Mean HC/CL",
+                                  "Mean BC HC/CL",
+                                  "Mean Installment HC/CL"))
+
+sd1 = aggregate(total_rev_hi_lim ~ loan_status_final, lending_data_vars_rem, sd)
+sd2 = aggregate(tot_hi_cred_lim ~ loan_status_final, lending_data_vars_rem, sd)
+sd3 = aggregate(total_bc_limit ~ loan_status_final, lending_data_vars_rem, sd)
+sd4 = aggregate(total_il_high_credit_limit ~ loan_status_final, lending_data_vars_rem, sd)
+sd_mo_rec = cbind(sd1, sd2[2], sd3[2], sd4[2])
+kable(sd_mo_rec, col.names = c("Loan Status",
+                                  "SD Revolving HC/CL",
+                                  "SD HC/CL",
+                                  "SD BC HC/CL",
+                                  "SD Installment HC/CL"))
+```
+
+Looking at the numerical summary, we can see that actually those who have not defaulted on their loan consistently have a higher high credit/credit limit. Therefore, this variable could be useful for predicting loan default. Let's go ahead and combine these variables into one variable, *hc_cl*, which gives us the borrowers total high credit/credit limit.
+
+```{r}
+hc_cl = lending_data_vars_rem$total_rev_hi_lim +
+  lending_data_vars_rem$tot_hi_cred_lim +
+  lending_data_vars_rem$total_bc_limit +
+  lending_data_vars_rem$total_il_high_credit_limit
+lending_data_vars_rem$hc_cl = hc_cl
+```
+
+Now, let's go ahead and impute the mean for the missing values in this new variable.
+
+```{r}
+hc_cl_mean = mean(hc_cl, na.rm = TRUE)
+lending_data_vars_rem$hc_cl[
+  is.na(lending_data_vars_rem$hc_cl)] = hc_cl_mean
+```
+
+That concludes similar variable combinations. Let's go through the rest of the variables and decide on removal or imputation.
+
+We will start with *tot_coll_amt*. Let's take a look at the summary statistics of this variable.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Total Collection Amount" = mean(tot_coll_amt, na.rm=TRUE),
+            "SD Total Collection Amount" = sd(tot_coll_amt, na.rm=TRUE),
+            "Max Total Collection Amount" = max(tot_coll_amt, na.rm=TRUE))
+```
+
+Looking at the means, the groups in this variable are very similar. However, looking at the standard deviation we can see that something is off. The maximum total collection amount for the `Not Default` group is over 9 million. This signifies that this variable is not verified, and therefore will not be accurate and useful. I will be removing this variable.
+
+Next, let's take a look at *tot_cur_bal*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Total Current Balance" = mean(tot_cur_bal, na.rm=TRUE),
+            "SD Total Current Balance" = sd(tot_cur_bal, na.rm=TRUE),
+            "Max Total Current Balance" = max(tot_cur_bal, na.rm=TRUE))
+```
+
+For this variable, we can see that the means between groups are largely different. However, with such a high maximum value this tells me that this variable was not verified and therefore will not be accurate and useful. I will be removing this variable.
+
+Next, let's take a look at *avg_cur_bal*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Average Current Balance" = mean(avg_cur_bal, na.rm=TRUE),
+            "SD Average Current Balance" = sd(avg_cur_bal, na.rm=TRUE),
+            "Max Average Current Balance" = max(avg_cur_bal, na.rm=TRUE))
+```
+
+For this variable, we can see that the average current balance between groups differs by a good amount. Looking at the maximum current balance however tells me that this variable was also not verified and therefore will not be accurate and useful. Also, imputing values for an aggregated variable can cause issues. I will be removing this variable.
+
+Next, let's take a look at *bc_open_to_buy*
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Total Open to Buy on Bankcards" = mean(bc_open_to_buy, na.rm=TRUE),
+            "SD Total Open to Buy on Bankcards" = sd(bc_open_to_buy, na.rm=TRUE),
+            "Max Total Open to Buy on Bankcards" = max(bc_open_to_buy, na.rm=TRUE))
+```
+
+For this variable, we can see that the average current balance between groups differs by a small amount. Looking at the maximum current balance however tells me that this variable was also not verified and therefore will not be accurate and useful. I will be removing this variable.
+
+Next, let's take a look at *bc_util*. Recall this variable is the ratio of total current balance to high credit/credit limit for all bankcard accounts.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Ratio" = mean(bc_util, na.rm=TRUE),
+            "SD Ratio" = sd(bc_util, na.rm=TRUE),
+            "Max Ratio" = max(bc_util, na.rm=TRUE))
+```
+
+Looking at the means between groups, the difference is not very high but the standard deviations are consistent. Those who have defaulted on their loan have a higher ratio of current balance to credit limit. This variable seems to me that it would be useful for predicting loan default as it is related to paying off balances. Let's take a look at the distribution of this variable for imputation.
+
+```{r}
+bc_util = lending_data_vars_rem$bc_util
+bc_util_mean = mean(bc_util, na.rm = TRUE)
+bc_util_median = median(bc_util, na.rm = TRUE)
+ggplot(lending_data_vars_rem, aes(x = num_accs)) +
+  geom_histogram(stat = "bin", bins = 50, color = "blue") +
+  geom_vline(aes(xintercept = bc_util_mean,
+             color = "Mean")) +
+  geom_vline(aes(xintercept = bc_util_median,
+             color = "Median")) +
+  xlab("Ratio") +
+  ylab("Number of Observations") +
+  ggtitle("Histogram of Ratios") +
+  theme(plot.title = element_text(hjust = 0.50)) +
+  scale_color_manual(name = "Summary Stats",
+                     labels = c("Mean", "Median"),
+                     values = c("red", "green"))
+```
+
+Looking at the distribution, let's go ahead and impute the median as it more centered.
+
+```{r}
+lending_data_vars_rem$bc_util[
+  is.na(lending_data_vars_rem$bc_util)] = bc_util_median
+```
+
+Next, let's take a look at *mo_sin_old_rev_tl_op*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Mos Since Oldest Rev. Acc. Opened" = 
+              mean(mo_sin_old_rev_tl_op, na.rm=TRUE),
+            "SD Mos Since Oldest Rev. Acc. Opened" = 
+              sd(mo_sin_old_rev_tl_op, na.rm=TRUE),
+            "Max Mos Since Oldest Rev. Acc. Opened" = 
+              max(mo_sin_old_rev_tl_op, na.rm=TRUE))
+```
+
+Looking at the summary statistics, we can see that the mean months since the oldest revolving account opened are similar between loan status groups. The standard deviations of each group are almost identical, as well as the maximum. This tells me that there is not much of a difference between groups, and therefore this variable will not be very useful for predicting loan default. I will be removing this variable.
+
+Next, let's take a look at *mort_acc*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # of Mortgage Accs." = 
+              mean(mort_acc, na.rm=TRUE),
+            "SD # of Mortgage Accs" = 
+              sd(mort_acc, na.rm=TRUE),
+            "Max # of Mortgage Accs" = 
+              max(mort_acc, na.rm=TRUE))
+```
+
+Looking at the summary statistics, the mean # of mortgage accounts between loan status groups are similar. This makes sense to me as those who default or don't default on a loan will still own a house or have some sort of housing. Therefore, there will not be much of a difference between groups making this variable not very useful for predicting loan default. I will be removing this variable.
+
+Next, let's take a look at *num_accts_ever_120_pd*
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Accs. Ever 120 Days Past Due" = 
+              mean(num_accts_ever_120_pd, na.rm=TRUE),
+            "SD # Accs. Ever 120 Days Past Due" = 
+              sd(num_accts_ever_120_pd, na.rm=TRUE),
+            "Max # Accs. Ever 120 Days Past Due" = 
+              max(num_accts_ever_120_pd, na.rm=TRUE))
+```
+
+Looking at the summary statistics, the mean and standard deviation are almost identical between groups. With this result, this variable will not be of much use for predicting loan default. I will be removing this variable.
+
+Next, let's take a look at *pct_tl_nvr_dlq*
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Perc. Trades Never Delinquent" = 
+              mean(pct_tl_nvr_dlq, na.rm=TRUE),
+            "SD Perc. Trades Never Delinquent" = 
+              sd(pct_tl_nvr_dlq, na.rm=TRUE),
+            "Max Perc. Trades Never Delinquent" = 
+              max(pct_tl_nvr_dlq, na.rm=TRUE))
+```
+
+Looking at the summary statistics, the mean and standard deviation are almost identical between groups. With this result, this variable will not be of much use for predicting loan default. I will be removing this variable.
+
+Next, let's take a look at *percent_bc_gt_75*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Perc. BC > 75% of Limit" = 
+              mean(percent_bc_gt_75, na.rm=TRUE),
+            "SD Perc. BC > 75% of Limit" = 
+              sd(percent_bc_gt_75, na.rm=TRUE),
+            "Max Perc. BC > 75% of Limit" = 
+              max(percent_bc_gt_75, na.rm=TRUE))
+```
+
+Looking at the summary statistics, the mean between groups is different by a few percentage points. The standard deviation between groups is almost identical. The maximum for both groups is 100%. Since this variable tells us the percent of a borrowers bankcards greater than 75% of the limit, I believe this will be useful for predicting loan default as those with higher useage will have a harder time paying back their cards and loan.
+
+```{r}
+percent_bc_gt_75 = lending_data_vars_rem$percent_bc_gt_75
+percent_bc_gt_75_mean = mean(percent_bc_gt_75, na.rm = TRUE)
+percent_bc_gt_75_median = median(percent_bc_gt_75, na.rm = TRUE)
+ggplot(lending_data_vars_rem, aes(x = percent_bc_gt_75)) +
+  geom_histogram(stat = "bin", bins = 50, color = "blue") +
+  geom_vline(aes(xintercept = percent_bc_gt_75_mean,
+             color = "Mean")) +
+  geom_vline(aes(xintercept = percent_bc_gt_75_median,
+             color = "Median")) +
+  xlab("% BC > 75% Limit") +
+  ylab("Number of Observations") +
+  ggtitle("Histogram of % BC > 75% Limit") +
+  theme(plot.title = element_text(hjust = 0.50)) +
+  scale_color_manual(name = "Summary Stats",
+                     labels = c("Mean", "Median"),
+                     values = c("red", "green"))
+```
+
+There is not much of a distribution in this variable. However, I believe that imputing the median in this variable will be best since this variable seems to have value to predicting loan default. Let's go ahead and fill the missing values with the median.
+
+```{r}
+lending_data_vars_rem$percent_bc_gt_75[
+  is.na(lending_data_vars_rem$percent_bc_gt_75)] = percent_bc_gt_75_median
+```
+
+Next, let's take a look at *total_bal_ex_mort*. Since we already removed *tot_cur_bal*, this variable might be of more use since there will not be a large loan included which is a mortgage.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Total Bal. Excl. Mortgage" = 
+              mean(total_bal_ex_mort, na.rm=TRUE),
+            "SD Total Bal. Excl. Mortgage" = 
+              sd(total_bal_ex_mort, na.rm=TRUE),
+            "Max Total Bal. Excl. Mortgage" = 
+              max(total_bal_ex_mort, na.rm=TRUE))
+```
+
+Looking at the summary statistics, the mean and standard deviation are almost identical between groups. Also, looking at the maximum values between groups we can see that this variable is not verified. With this result, this variable will not be of much use for predicting loan default. I will be removing this variable.
+
+We have now gone through all of the variables that have greater than 50,000 missing values. Let's remove all of these variables that I have stated to be removed.
+
+```{r}
+remove_list2 = c("mo_sin_rcnt_rev_tl_op",
+      "mo_sin_rcnt_tl",
+      "mo_sin_rcnt_rev_tl_op",
+      "mths_since_recent_bc",
+      "num_actv_bc_tl",
+      "num_actv_rev_tl",
+      "num_bc_sats",
+      "num_bc_tl",
+      "num_il_tl",
+      "num_op_rev_tl",
+      "num_rev_accts",
+      "num_rev_tl_bal_gt_0",
+      "num_sats",
+      "num_tl_op_past_12m",
+      "total_rev_hi_lim",
+      "tot_hi_cred_lim",
+      "total_bc_limit",
+      "total_il_high_credit_limit",
+      "tot_coll_amt",
+      "tot_cur_bal",
+      "avg_cur_bal",
+      "bc_open_to_buy",
+      "mo_sin_old_rev_tl_op",
+      "mort_acc",
+      "num_accts_ever_120_pd",
+      "pct_tl_nvr_dlq",
+      "total_bal_ex_mort",
+      "num_tl_30dpd",
+      "num_tl_90g_dpd_24m"
+)
+
+lending_data_vars_rem = lending_data_vars_rem[, !(names(lending_data_vars_rem) %in% remove_list2)]
+total_vars_4 = ncol(lending_data_vars_rem) - 1
+```
+
+We have now reduced the number of columns to `r total_vars_4`. We now want to focus on fixing variables with any amount of missing values. Let's go ahead and get a list of these variables.
+
+```{r}
+numeric_vars = lending_data_vars_rem %>% select_if(is.numeric)
+num_any_missing = colnames(numeric_vars)[colSums(is.na(numeric_vars)) > 0]
+num_any_missing
+```
+
+- "annual_inc" - The self-reported annual income provided by the borrower during registration.
+- "dti" - Debt (Excluding Mortgage & LC Loan) to Income Ratio.
+- "delinq_2yrs" - The number of 30+ days past-due incidences of delinquency in the borrower's credit file for the past 2 years
+- "inq_last_6mths" - The number of inquiries in past 6 months (excluding auto and mortgage inquiries)
+- "open_acc" - The number of open credit lines in the borrower's credit file.
+- "pub_rec" - Number of derogatory public records
+- "revol_util" - Total credit revolving balance
+- "total_acc" - The total number of credit lines currently in the borrower's credit file
+- "collections_12_mths_ex_med" - Number of collections in 12 months excluding medical collections
+- "acc_now_delinq" - The number of accounts on which the borrower is now delinquent.
+- "acc_open_past_24mths" - Number of trades opened in past 24 months.
+- "chargeoff_within_12_mths" - Number of charge-offs within 12 months
+- "delinq_amnt" - The past-due amount owed for the accounts on which the borrower is now delinquent.
+- "pub_rec_bankruptcies" - Number of public record bankruptcies
+- "tax_liens" - Number of tax liens
+
+*Annual_inc* was one of the first variables we looked at. Let's go ahead and impute the mean for this variable and move on to the next.
+
+```{r}
+ann_inc_mean = mean(lending_data_vars_rem$annual_inc, na.rm = TRUE)
+lending_data_vars_rem$annual_inc[
+  is.na(lending_data_vars_rem$annual_inc)] = ann_inc_mean
+```
+
+Next, let's take a look at *dti*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean DTI" = 
+              mean(dti, na.rm=TRUE),
+            "SD DTI" = 
+              sd(dti, na.rm=TRUE),
+            "Max DTI" = 
+              max(dti, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(dti)))
+```
+
+Looking at the summary statistics between groups, we can see that those who have not defaulted on their loan have a lower debt to income ratio. I believe that this variable will be useful for predicting loan default as it gives us a great statistic for judging how much debt they have to pay off compared to their income. Let's take a look at the histogram for this variable for possible imputation values. Note that the maximum of this variable is 999. Under the hood the minimum is actually -1. I believe that these values are outliers and should be ignored. We will take care of outliers later on.
+
+```{r}
+dti_mean = mean(lending_data_vars_rem$dti,
+                na.rm = TRUE)
+dti_median = median(lending_data_vars_rem$dti,
+                    na.rm = TRUE)
+ggplot(lending_data_vars_rem, aes(x = dti)) +
+  geom_histogram(stat = "bin", bins = 50, color = "blue") +
+  xlim(0, 100) +
+  geom_vline(aes(xintercept = dti_mean,
+             color = "Mean")) +
+  geom_vline(aes(xintercept = dti_median,
+             color = "Median")) +
+  xlab("Debt to Income Ratio") +
+  ylab("Number of Observations") +
+  ggtitle("Histogram of DTI") +
+  theme(plot.title = element_text(hjust = 0.50)) +
+  scale_color_manual(name = "Summary Stats",
+                     labels = c("Mean", "Median"),
+                     values = c("red", "green"))
+```
+
+Looking at the distribution, let's go ahead and fill the missing values with the median as the data is more centered around the median.
+
+```{r}
+lending_data_vars_rem$dti[
+  is.na(lending_data_vars_rem$dti)] = dti_median
+```
+
+Next, let's take a look at *delinq_2yrs*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Delinquencies" = 
+              mean(delinq_2yrs, na.rm=TRUE),
+            "SD # Delinquencies" = 
+              sd(delinq_2yrs, na.rm=TRUE),
+            "Max # Delinquencies" = 
+              max(delinq_2yrs, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(delinq_2yrs)))
+```
+
+Looking at the summary statistics, there is not much of a difference between groups. However, there is some difference and the number of NA values is small at only 29 values. Let's go ahead and fill the missing values with the mean of this variable.
+
+```{r}
+delinq_2yrs_mean = mean(
+  lending_data_vars_rem$delinq_2yrs,
+  na.rm = TRUE)
+
+lending_data_vars_rem$delinq_2yrs[
+  is.na(lending_data_vars_rem$delinq_2yrs)] = delinq_2yrs_mean
+```
+
+Next, let's take a look at *inq_last_6mths*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Inquiries" = 
+              mean(inq_last_6mths, na.rm=TRUE),
+            "SD # Inquiries" = 
+              sd(inq_last_6mths, na.rm=TRUE),
+            "Max # Inquiries" = 
+              max(inq_last_6mths, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(inq_last_6mths)))
+```
+
+Looking at the summary statistics, there is somewhat of a difference between groups. The number of NA values is also small. Let's go ahead and fill the missing values with the mean of this variable.
+
+```{r}
+inq_last_6mths_mean = mean(
+  lending_data_vars_rem$inq_last_6mths,
+  na.rm = TRUE)
+
+lending_data_vars_rem$inq_last_6mths[
+  is.na(lending_data_vars_rem$inq_last_6mths)] = inq_last_6mths_mean
+```
+
+
+Next, let's take a look at *open_acc*. Recall that I created a variable indicating the total number of accounts a borrower has/had. Let's go ahead and remove this variable to avoid high collinearity issues.
+
+Next, let's take a look at *pub_rec*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Public Records" = 
+              mean(pub_rec, na.rm=TRUE),
+            "SD # Public Records" = 
+              sd(pub_rec, na.rm=TRUE),
+            "Max # Public Records" = 
+              max(pub_rec, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(pub_rec)))
+```
+
+Looking at the summary statistics, there is somewhat of a difference between groups. The number of NA values is also small. Since this variable indicates the number of public derogatory records for the borrower, this may be useful for predicting loan default as those who have defaulted on their loan have a higher average and maximum. Let's go ahead and fill the missing values with the mean of this variable.
+
+```{r}
+pub_rec_mean = mean(
+  lending_data_vars_rem$pub_rec,
+  na.rm = TRUE)
+
+lending_data_vars_rem$pub_rec[
+  is.na(lending_data_vars_rem$pub_rec)] = pub_rec_mean
+```
+
+Next, let's take a look at *revol_util*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Revolving Credit Utilization" = 
+              mean(revol_util, na.rm=TRUE),
+            "SD Revolving Credit Utilization" = 
+              sd(revol_util, na.rm=TRUE),
+            "Max Revolving Credit Utilization" = 
+              max(revol_util, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(revol_util)))
+```
+
+Looking at this variable, the difference between groups is very small. While I do believe this variable could be useful, since the difference between groups is small I do not believe it will benefit our model much. I will be removing this variable.
+
+Next, let's take a look at *total_acc*. Recall that I created a variable indicating the total number of accounts a borrower has/had. Let's go ahead and remove this variable to avoid high collinearity issues.
+
+Next, let's take a look at *collections_12_mths_ex_med*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Coll. Last 12 Months" = 
+              mean(collections_12_mths_ex_med, na.rm=TRUE),
+            "SD Coll. Last 12 Months" = 
+              sd(collections_12_mths_ex_med, na.rm=TRUE),
+            "Max Coll. Last 12 Months" = 
+              max(collections_12_mths_ex_med, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(collections_12_mths_ex_med)))
+```
+
+Looking at this variable, the difference between groups is very small. While I do believe this variable could be useful, since the difference between groups is small I do not believe it will benefit our model much. I will be removing this variable.
+
+Next, let's take a look at *acc_now_delinq*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Accs. Delinquent" = 
+              mean(acc_now_delinq, na.rm=TRUE),
+            "SD # Accs. Delinquent" = 
+              sd(acc_now_delinq, na.rm=TRUE),
+            "Max # Accs. Delinquent" = 
+              max(acc_now_delinq, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(acc_now_delinq)))
+```
+
+Looking at this variable, the difference between groups is very, very small. While I do believe this variable could be useful, since the difference between groups is so small I do not believe it will benefit our model much. I will be removing this variable.
+
+Next, let's take a look at *acc_open_past_24mths*. Recall that I created a variable indicating the total number of accounts a borrower has/had. Let's go ahead and remove this variable to avoid high collinearity issues.
+
+Next, let's take a look at *chargeoff_within_12_mths*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Charge-Offs within 12 Mos" = 
+              mean(chargeoff_within_12_mths, na.rm=TRUE),
+            "SD # Charge-Offs within 12 Mos" = 
+              sd(chargeoff_within_12_mths, na.rm=TRUE),
+            "Max # Charge-Offs within 12 Mos" = 
+              max(chargeoff_within_12_mths, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(chargeoff_within_12_mths)))
+```
+
+Looking at this variable, the difference between groups is very, very small. While I do believe this variable could be useful, since the difference between groups is so small I do not believe it will benefit our model much. I will be removing this variable.
+
+Next, let's take a look at *delinq_amnt*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean Delinquent Amount" = 
+              mean(delinq_amnt, na.rm=TRUE),
+            "SD Delinquent Amount" = 
+              sd(delinq_amnt, na.rm=TRUE),
+            "Max Delinquent Amount" = 
+              max(delinq_amnt, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(delinq_amnt)))
+```
+
+Looking at the summary statistics, we can see that those who have defaulted on their loan on average have a higher average deliquent amount. The standard deviation is also much higher for those who have defaulted. Let's go ahead and fill the missing values with the mean of this variable.
+
+```{r}
+delinq_amnt_mean = mean(
+  lending_data_vars_rem$delinq_amnt,
+  na.rm = TRUE)
+
+lending_data_vars_rem$delinq_amnt[
+  is.na(lending_data_vars_rem$delinq_amnt)] = delinq_amnt_mean
+```
+
+Next, let's take a look at *pub_rec_bankruptcies*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Pub. Rec. Bankruptcies" = 
+              mean(pub_rec_bankruptcies, na.rm=TRUE),
+            "SD # Pub. Rec. Bankruptcies" = 
+              sd(pub_rec_bankruptcies, na.rm=TRUE),
+            "Max # Pub. Rec. Bankruptcies" = 
+              max(pub_rec_bankruptcies, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(pub_rec_bankruptcies)))
+```
+
+Looking at the summary statistics, there is not much of a difference between groups. However, it can be seen that those who have defaulted on their loan have a higher average of public record bankruptcies. Since this variable can be useful for predicting loan default (those who have declared bankruptcy are typically unable to pay), I will be keeping it and filling the NA values with the mean.
+
+```{r}
+pub_rec_bankruptcies_mean = mean(
+  lending_data_vars_rem$pub_rec_bankruptcies,
+  na.rm = TRUE)
+
+lending_data_vars_rem$pub_rec_bankruptcies[
+  is.na(lending_data_vars_rem$pub_rec_bankruptcies)] = pub_rec_bankruptcies_mean
+```
+
+Lastly, let's take a look at *tax_liens*.
+
+```{r}
+lending_data_vars_rem %>% group_by(loan_status_final) %>%
+  summarise("Mean # Tax Liens" = 
+              mean(tax_liens, na.rm=TRUE),
+            "SD # Tax Liens" = 
+              sd(tax_liens, na.rm=TRUE),
+            "Max # Tax Liens" = 
+              max(tax_liens, na.rm=TRUE),
+            "Total NA Values" =
+              sum(is.na(tax_liens)))
+```
+
+Looking at the summary statistics, there is not much of a difference between groups. However, it can be seen that those who have defaulted on their loan have a higher average of tax liens. Also, those who have defaulted on their loan have a higher max number of tax liens. Since this variable can be useful for predicting loan default, I will be keeping it and filling the NA values with the mean.
+
+```{r}
+tax_liens_mean = mean(
+  lending_data_vars_rem$tax_liens,
+  na.rm = TRUE)
+
+lending_data_vars_rem$tax_liens[
+  is.na(lending_data_vars_rem$tax_liens)] = tax_liens_mean
+```
+
+We are now complete with looking at variables with greater than zero missing values. Let's go ahead and remove the variables stated above. I will also be removing an extra variable, *policy_code*, as it is meaningless. This variable relates to the loan policy, in which all of these loans are policy 1. Therefore, it will not be useful in our models.
+
+```{r}
+remove_list_3 = c("open_acc",
+        "revol_util",
+        "total_acc",
+        "collections_12_mths_ex_med",
+        "acc_now_delinq",
+        "acc_open_past_24mths",
+        "chargeoff_within_12_mths",
+        "policy_code")
+
+lending_data_vars_rem = lending_data_vars_rem[, !(names(lending_data_vars_rem)
+                                                  %in% remove_list_3)]
+total_vars_5 = ncol(lending_data_vars_rem) - 1
+```
+
+Overall, we have drastically reduced the number of features in our dataset from 144 to `r total_vars_5`. We also now have a grand total of 0 variables with missing values.
+
+In this section, we have cleaned and filled both character and numeric variables. We have removed variables that are not useful, and kept or engineered variables that will be of much use for our end goal of predicting loan default through the use of numerical and visual aid. We will now shift our focus to modeling our data and creating a useful prediction model. Before we move on, let's make a copy of our final data and name it to `lending_data_final` to confirm we are working with finalized data.
+
+```{r}
+lending_data_final = lending_data_vars_rem
+
+rm(list = setdiff(ls(), "lending_data_final"))
+
+#vroom_write(lending_data_final,
+#           "lending_data_final.csv",
+#           delim = ",")#write to file to avoid large markdown files..
+```
+
+Let's move on to modeling our data.
+
+##Splitting & Standardizing Data
+
+**Splitting Data**
+
+Since our target variable has two levels of `Default` and `Not Default`, I will be utilizing Stratified sampling in order to maintain similar percentages of each level in our train and test data set. This is so our train or test set is not imbalanced with either of the target variable levels. Let's go ahead and set a seed to maintain consistency, and then split the data. I will be splitting the data into a 70% train set and 30% test set.
+
+```{r}
+set.seed(490)
+
+lending_data_final[sapply(lending_data_final, is.character)] = lapply(
+  lending_data_final[sapply(lending_data_final, is.character)],
+  as.factor
+)#coerce all character variables to factors..
+
+lending_data_final$loan_status_final = relevel(
+  lending_data_final$loan_status_final, ref = "Not Default"
+)#this changes our reference level so our model is predicting Defaults.
+
+train_index = createDataPartition(
+  lending_data_final$loan_status_final,
+  p = .70,
+  list = FALSE)
+
+lending_data_train = lending_data_final[train_index,]
+lending_data_test = lending_data_final[-train_index,]
+
+rm(train_index)
+```
+
+With our data split, we can onto standardizing our data. Recall I briefly mentioned dealing with outliers in the data. I will be standardizing our data to be in a smaller range for numeric variables. Let's go ahead and do that.
+
+```{r}
+num_columns = colnames(lending_data_test %>% select_if(is.numeric))
+scales = build_scales(lending_data_train,
+                      num_columns,
+                      verbose = TRUE)
+
+lending_data_train_scaled = fastScale(lending_data_train,
+                                      scales = scales,
+                                      verbose = TRUE)
+lending_data_test_scaled = fastScale(lending_data_test,
+                                      scales = scales,
+                                      verbose = TRUE)
+```
+
+##Data Modeling
+
+**Logistic Regression Fitting**
+
+Our first of many algorithms we will use is Logistic Regression. We will be fitting a few different logistic regression models, but our first model will be with what I expect to be the most important variable which is `annual_inc`.
+
+```{r}
+
+model_eval = function(model, data) {
+  num_vars = length(model$coefficients) - 1
+  predictions = predict(model,
+                    data,
+                    type = "response")
+  label_pred = ifelse(predictions > .50,
+                      "Default",
+                      "Not Default")
+  accuracy = mean(label_pred == data$loan_status_final)
+  data.frame(num_vars,
+             accuracy)
+}#simple model evaluation function
+```
+
+```{r}
+
+log_model_1 = glm(loan_status_final ~ annual_inc,
+                  data = lending_data_train_scaled,
+                  family = binomial)
+
+log_mod1_eval = model_eval(log_model_1,
+                           lending_data_train_scaled)
+
+```
+
+Our next model I will build is using the variable `int_rate`. I believe that this variable is also very useful for predicting loan default. Let's go ahead and build the model.
+
+```{r}
+log_model_2 = glm(loan_status_final ~ int_rate,
+                  data = lending_data_train_scaled,
+                  family = binomial)
+
+log_mod2_eval = model_eval(log_model_2,
+                           lending_data_train_scaled)
+```
+
+
+Our last single variable model will be using the variable `loan_amnt`. I believe that this variable is as well very useful for predicting loan default, as discussed in the beginning of the report. Let's go ahead and build the model.
+
+```{r}
+log_model_3 = glm(loan_status_final ~ loan_amnt,
+                  data = lending_data_train_scaled,
+                  family = binomial)
+
+log_mod3_eval = model_eval(log_model_3,
+                           lending_data_train_scaled)
+```
+
+Now, let's go ahead and create a model that contains all three variables `annual_inc`, `int_rate`, and `loan_amnt`. Since these were the three most important features I had originally discussed, I believe that this model will be great for predicting loan defaults. Let's create this model.
+
+```{r}
+log_model_4 = glm(loan_status_final ~ annual_inc + int_rate + loan_amnt,
+                  data = lending_data_train_scaled,
+                  family = binomial)
+
+log_mod4_eval = model_eval(log_model_4,
+                           lending_data_train_scaled)
+```
+
+Our last model we will build will introduce some categorical variables. I will be including the three features above, as well as the variables `grade`, and `term`. I chose these categorical variables as I believed they both contain valuable information on predicting loan default. Let's go ahead and build the model.
+
+```{r}
+log_model_5 = glm(loan_status_final ~ annual_inc +
+                    int_rate + loan_amnt +
+                    term + grade,
+                  data = lending_data_train_scaled,
+                  family = binomial)
+
+log_mod5_eval = model_eval(log_model_5,
+                           lending_data_train_scaled)
+```
+
+So for all five of these models, I used the following variables:
+
+- *annual_inc*
+- *int_rate*
+- *loan_amnt*
+- *term*
+- *grade*
+
+These relationships make sense as I believe that these variables are all some of the most important variables for predicting loan default.
+
+Annual income is directly tied to being able to payoff loans.
+
+Interest rates can show underlying risk, and therefore can those with higher rates have a higher chance of default.
+
+Those with a higher loan amount will typically have more trouble paying it off, leading to default.
+
+Terms were shown previously that those with shorter terms have a lower default rate. Therefore, lower term means less risk of default.
+
+Grades are the grade of the loan, and it was shown that the worse grade the higher chance of default.
+
+Now, let's create a table that shows us the accuracy rate as well as the number of variables in each model.
+
+```{r}
+log_models_df = data.frame("Model 1" = 
+                             c("# Vars" = log_mod1_eval$num_vars,
+                               "Accuracy" = log_mod1_eval$accuracy),
+                           "Model 2" = 
+                             c("# Vars" = log_mod2_eval$num_vars,
+                               "Accuracy" = log_mod2_eval$accuracy),
+                           "Model 3" = 
+                             c("# Vars" = log_mod3_eval$num_vars,
+                               "Accuracy" = log_mod3_eval$accuracy),
+                           "Model 4" = 
+                             c("# Vars" = log_mod4_eval$num_vars,
+                               "Accuracy" = log_mod4_eval$accuracy),
+                           "Model 5" = 
+                             c("# Vars" = log_mod5_eval$num_vars,
+                               "Accuracy" = log_mod5_eval$accuracy)
+)
+kable(log_models_df)
+```
+
+Looking at the table above, we can see that all models perform very similarly. However, the best model when evaluated on the training data is Model 5. This model included variables *annual_inc*, *int_rate*, *loan_amnt*, *term*, and *grade*. So, in this case our best model was the one with all variables. Let's shift our focus to this best model now.
+
+**Logistic Regression - Best Model**
+
+Now that we have chosen our best model to be model 5, let's get a better intuition of this model. First, let's take a quick look at the summary and then let's go through each X and it's effect on Y.
+
+```{r}
+summary(log_model_5)
+```
+
+Each coefficient can be interpreted in terms of log odds.  Log odds is the logarithm of the odds $\frac{p}{1-p}$ where p is probability. We can obtain the odds by taking the exponential of this value. We can then directly obtain the probability by this formula, where O is the odds.
+
+$\frac{O}{1-O}$
+
+*Intercept* - If the annual income, interest rate, and loan amount is all zero and the borrower has a term of 36 months and a loan grade of A then the log odds is `r coef(log_model_5)[1]`.
+
+*Annual_inc* - If the annual income of a borrower increases by 1 unit, then the expected change in log odds is `r coef(log_model_5)[2]`.
+
+*Int_rate* - If the interest rate of a borrower increases by 1 unit, then the expected change in log odds is `r coef(log_model_5)[3]`.
+
+*Loan_amnt* - If the loan amount of a borrower increases by 1 unit, then the expected change in log odds is `r coef(log_model_5)[4]`.
+
+*Term60 Months* - If the loan is a 60 month term, then the log odds ratio between the 60 month and 36 month groups is `r coef(log_model_5)[5]`.
+
+*GradeB* - If the loan is of grade B, then the log odds ratio between the B and A loan grade groups is `r coef(log_model_5)[6]`.
+
+*GradeC* - If the loan is of grade B, then the log odds ratio between the C and A loan grade groups is `r coef(log_model_5)[7]`.
+
+*GradeD* - If the loan is of grade B, then the log odds ratio between the D and A loan grade groups is `r coef(log_model_5)[8]`.
+
+*GradeE* - If the loan is of grade B, then the log odds ratio between the E and A loan grade groups is `r coef(log_model_5)[9]`.
+
+*GradeF* - If the loan is of grade B, then the log odds ratio between the F and A loan grade groups is `r coef(log_model_5)[10]`.
+
+*GradeG* - If the loan is of grade B, then the log odds ratio between the G and A loan grade groups is `r coef(log_model_5)[11]`.
+
+Looking back at the summary of the model, we can see that all variables are significantly different from zero at the "0" level. This assumes that the probability the coefficients of these variables are zero is zero itself.
+
+Since we are doing logistic regression, instead of using an F statistic for evaluating the model validity as a whole, we actually use the Likelihood Ratio Test. The Likelihood Ratio Test (LRT) follows a $\chi^2$ distribution with some degrees of freedom. The LRT assumes a null hypothesis that all coefficients are equal to zero, and the alternative is that at least of of the coefficients is not equal to zero. If we reject the null, that means that our model has at least one coefficient different from zero and therefore our model is valid as a whole.
+
+Let's go ahead and perform the test.
+
+```{r}
+base_log_mod = glm(loan_status_final ~ 1,
+                  data = lending_data_train_scaled,
+                  family = binomial)
+anova_ref = anova(base_log_mod, log_model_5, test = "LRT")
+anova(base_log_mod, log_model_5, test = "LRT")
+```
+
+We can see that we get a $\chi^2$ statistic of `r anova_ref$Deviance[2]` on `r anova_ref$Df[2]` degrees of freedom. This yields us a p-value of approximately zero, so we therefore reject the null hypothesis that all coefficients is equal to zero. So what we have learned from this test and the $\chi^2$ statistic is that this model is valid as a whole.
+
+**Logistic Regression - Best Model - True Pos & False Pos Rates**
+
+Next, let's go ahead and take a look at the true positive and false positive rates. For this, we will need the confusion matrix of the model.
+
+```{r}
+log_mod5_pred = predict(log_model_5,
+                    lending_data_train_scaled,
+                    type = "response")
+
+log_mod5_label_pred = ifelse(log_mod5_pred > .50,
+                      "Default",
+                      "Not Default")
+
+log_mod5_conf_mtx = confusionMatrix(table(
+  predicted = log_mod5_label_pred,
+  actual = lending_data_train_scaled$loan_status_final)[2:1, 1:2],
+  positive = "Default")
+```
+
+Now that we have the confusion matrix, we can obtain the true positive and false positive rates. Recall the formula for the true positive rate is the number of true positives divided by the total number of positives in the population. Let's get the true positive rate now.
+
+```{r}
+log_mod5_tp_rate = log_mod5_conf_mtx$log_mod5_conf_mtx$byClass[1]
+log_mod5_tp_rate
+```
+
+So, the true positive rate for this model is .022094. In other words, we are able to correctly predict that someone is going to "Default" on the loan at a very low rate. Since our goal is to predict loan defaults, this is not where we want to be. Let's check our false positive rate.
+
+The false positive rate formula is the total number of incorrect positive predictions divided by the total number of negatives in the population.
+
+```{r}
+log_mod5_fp_rate = 1 - log_mod5_conf_mtx$log_mod5_conf_mtx$byClass[2]
+log_mod5_fp_rate
+```
+
+So, the false positive rate for this model is .005007. In other words, the rate that we incorrectly predict the positive label is very low. Since we are worried about predicting loan defaults, we need to focus more on the true positive rate. We would like to maximize this rate with our model as we are more worried about correctly classifying loan defaults.
+
+Overall, these rates tell me that my regression is predicting the majority class. Since the true positive is near 0, my model is almost always correctly predicting the negative label. However, the model is overpredicting the negative label and therefore causing a low true positive rate. Since we want to correctly predict loan defaults, this model is not performing how I would like it to.
+
+**Logistic Regression - Best Model - Coefficients & Std. Errors**
+
+With true and false positive rates aside, let's dive deeper into the coefficients. We will be plotting the estimated coefficients and their standard errors.
+
+Since the test statistics of the estimated coefficients follow a normal distribution, we can compute confidence intervals for the coefficient using the normal distribution. I will be computing 90% confidence intervals for each coefficient and plotting it.
+
+```{r}
+z = qnorm(.05, lower.tail = FALSE)
+coef_confint = data.frame(
+  "Coefficient" = rownames(summary(log_model_5)$coefficients),
+  "Estimate" = summary(log_model_5)$coefficients[, 1],
+  "Lower Bound" = summary(log_model_5)$coefficients[, 1] - 
+    z*summary(log_model_5)$coefficients[, 2],
+  "Upper Bound" = summary(log_model_5)$coefficients[, 1] + 
+    z*summary(log_model_5)$coefficients[, 2]
+)
+
+ggplot(coef_confint, aes(Coefficient, Estimate)) +
+  geom_point() +
+  geom_pointrange(aes(ymin = Lower.Bound, ymax = Upper.Bound),
+                  fill = "white", shape = 22, color = "blue") +
+  labs(x = "Coefficients", y = "Estimate",
+       title = "Plot of Coefficients & 90% CI") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Looking ast the plot, we can see that the only variable that has visible confidence interval lines is "gradeG". However, the probalility of this variable having a coefficient equal to zero is approximately zero. We can conclude that all variables are significant at the "0" level. 
+
+**Logistic Regression - Best Model - Probit**
+
+With coefficient visualization complete, let's move forward. We will now be re-evaluating our model using probit regression. We will then be comparing the accuracy of this new model with our original model which used logit regression.
+
+```{r}
+log_model_5_probit = glm(loan_status_final ~ annual_inc +
+                    int_rate + loan_amnt +
+                    term + grade,
+                  data = lending_data_train_scaled,
+                  family = binomial(link = "probit"))
+
+log_model_5_probit_eval = model_eval(log_model_5_probit,
+                                     lending_data_train_scaled)
+```
+
+```{r}
+log_acc_compare_df = data.frame(
+  "Logistic Regression" = c("Accuracy" = log_mod5_eval$accuracy),
+  "Probit Regression" = c("Accuracy" = log_model_5_probit_eval$accuracy)
+)
+kable(log_acc_compare_df)
+```
+
+Comparing our accuracy rates above, we can see that logistic regression slightly outperforms probit regression. Therefore, by the use of accuracy rate only, I can say that logistic regression performs better for this model. 
+
+This concludes the section on logistic regression.
+
+**K Nearest Neighbors**
+
+For this section, we will be creating a K-Nearest Neighbors classification model. We will be training a few models with different K's, and then choosing the model that performs the best on our test data. After so, we will predict results, take a look at the accuracy and compare to our results with logistic regression. I will be using the same variables that I had used in the best logistic regression model.
+
+**KNN - Model Training**
+
+For model building, I will be building 4 models. For each model, I will use a different level K. These level K's I will be using are 1, 5, 10, and 50. I will then evaluate each models accuracy on the test data and choose the model that performs best on that data.
+
+
+First, we will be getting a sample of the data to reduce our training and prediction times. I will be sampling 25% of the full data for use, and then splitting that into train and test sets. I will also be scaling that data.
+
+```{r}
+set.seed(490)
+
+sample_idx = createDataPartition(
+  lending_data_final$loan_status_final,
+  p = .25,
+  list = FALSE)
+
+lending_sampled = lending_data_final[sample_idx,]
+
+trn_idx = createDataPartition(
+  lending_sampled$loan_status_final,
+  p = .70,
+  list = FALSE)
+
+lending_data_samp_trn = lending_sampled[trn_idx,]
+lending_data_samp_tst = lending_sampled[-trn_idx,]
+
+scales = build_scales(lending_data_train,
+                      num_columns,
+                      verbose = TRUE)
+
+lending_data_samp_scaled_trn = fastScale(lending_data_samp_trn,
+                                      scales = scales,
+                                      verbose = TRUE)
+lending_data_samp_scaled_tst = fastScale(lending_data_samp_tst,
+                                      scales = scales,
+                                      verbose = TRUE)
+
+```
+
+
+
+
+```{r}
+set.seed(490)
+
+knn_1 = knn3(loan_status_final ~ annual_inc +
+                    int_rate + loan_amnt +
+                    term + grade,
+       data = lending_data_samp_scaled_trn,
+       k = 1)
+
+knn_5 = knn3(loan_status_final ~ annual_inc +
+                    int_rate + loan_amnt +
+                    term + grade,
+       data = lending_data_samp_scaled_trn,
+       k = 5)
+
+knn_10 = knn3(loan_status_final ~ annual_inc +
+                    int_rate + loan_amnt +
+                    term + grade,
+       data = lending_data_samp_scaled_trn,
+       k = 10)
+
+knn_50 = knn3(loan_status_final ~ annual_inc +
+                    int_rate + loan_amnt +
+                    term + grade,
+       data = lending_data_samp_scaled_trn,
+       k = 50)
+```
+
+With the models trained, let's go ahead and predict on each model using the test data to get their accuracy and error rates. We will be choosing the model that minimizes the error rate on the test data.
+
+```{r}
+
+lending_data_samp_scaled_tst_subset = lending_data_samp_scaled_tst %>%
+  select(annual_inc, int_rate, loan_amnt, term, grade, loan_status_final)
+
+knn_1_pred = predict(knn_1,
+                     lending_data_samp_scaled_tst_subset,
+                     type = "class")
+knn_1_acc = mean(knn_1_pred
+                 == lending_data_samp_scaled_tst_subset$loan_status_final)
+knn_1_err = mean(knn_1_pred
+                 != lending_data_samp_scaled_tst_subset$loan_status_final)
+
+knn_5_pred = predict(knn_5,
+                     lending_data_samp_scaled_tst_subset,
+                     type = "class")
+knn_5_acc = mean(knn_5_pred
+                 == lending_data_samp_scaled_tst_subset$loan_status_final)
+knn_5_err = mean(knn_5_pred
+                 != lending_data_samp_scaled_tst_subset$loan_status_final)
+
+knn_10_pred = predict(knn_10,
+                     lending_data_samp_scaled_tst_subset,
+                     type = "class")
+knn_10_acc = mean(knn_10_pred
+                  == lending_data_samp_scaled_tst_subset$loan_status_final)
+knn_10_err = mean(knn_10_pred
+                  != lending_data_samp_scaled_tst_subset$loan_status_final)
+
+knn_50_pred = predict(knn_50,
+                     lending_data_samp_scaled_tst_subset,
+                     type = "class")
+knn_50_acc = mean(knn_50_pred
+                  == lending_data_samp_scaled_tst_subset$loan_status_final)
+knn_50_err = mean(knn_50_pred
+                  != lending_data_samp_scaled_tst_subset$loan_status_final)
+
+knn_tst_results = data.frame("Accuracy" = c("K = 1" = knn_1_acc,
+                                            "K = 5" = knn_5_acc,
+                                            "K = 10" = knn_10_acc,
+                                            "K = 50" = knn_50_acc),
+                             "Error Rate" = c("K = 1" = knn_1_err,
+                                            "K = 5" = knn_5_err,
+                                            "K = 10" = knn_10_err,
+                                            "K = 50" = knn_50_err))
+
+kable(knn_tst_results)
+```
+
+Looking at the table above, the value of K that minimizes our error rate and maximizes accuracy is K = 50. Let's go ahead and predict on our full data using this model and then compare this to our best logistic regression model.
+
+**KNN - Model Evaluation**
+
+```{r}
+
+lending_data_samp_scaled_full = rbind(
+  lending_data_samp_scaled_trn,
+  lending_data_samp_scaled_tst)
+
+lending_data_samp_scaled_full_subset = lending_data_samp_scaled_full %>%
+  select(annual_inc, int_rate, loan_amnt, term, grade, loan_status_final)
+
+knn_50_full_pred = predict(knn_50,
+                     lending_data_samp_scaled_full_subset,
+                     type = "class")
+
+knn_50full_acc = mean(knn_50_full_pred
+                  == lending_data_samp_scaled_full_subset$loan_status_final)
+knn_50full_err = mean(knn_50_full_pred
+                  != lending_data_samp_scaled_full_subset$loan_status_final)
+
+knn_logistic_results = data.frame("Accuracy" = c("K = 50" = knn_50full_acc,
+                                            "Logistic" = log_mod5_eval$accuracy),
+                             "Error Rate" = c("K = 50" = knn_50full_err,
+                                            "Logistic" = 1 - log_mod5_eval$accuracy))
+
+kable(knn_logistic_results)
+```
+
+When predicting on our full data, our KNN classification model with K = 50 actually slightly outperforms our best logistic regression model. It should be taken into account that the logistic regression model accuracy is from predictions made on training data, so that could be boosting it's accuracy somewhat. Overall, we can see that our KNN classification model is slightly better when comparing to logistic regression on full data.
+
+This concludes the section on K Nearest Neighbors
+
+##Project Report 2 Wrapup
+
+In this project report, we have built logistic regression as well as K Nearest Neighbor models. We have taken a look at true and false positive rates, coefficients of the regression models, and compared model accuracies. Overall, these models performed well but I believe there is a lot of room to improve.
