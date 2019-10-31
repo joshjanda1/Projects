@@ -1,7 +1,7 @@
 ---
 title: "Lending Club - Predicting Defaults on Loans"
 author: "Josh Janda"
-date: "September 4, 2019"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
   pdf_document:
     dev: png
@@ -11,7 +11,9 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-##Introduction
+# Project 1
+
+## Introduction
 
 For my project, I will be evaluating the Lending Club loan dataset. In specific, I will be evaluating loans from the 2017 Quarter 1 period. This dataset includes information of all loans given by LendingClub.com. The goal of this project is to be able to predict the probability of default of a loan given a certain set of features. Some of the most important features (in my opinion), are:
 
@@ -32,11 +34,11 @@ Moving onto our target (independent) variable, we will be trying to predict:
 
 - *loan_status*: Current status of the loan
 
-##Data Loading and Exploration
+## Data Loading and Exploration
 
 Now that we have introduced the data and our goal for it, we will want to load the data. But first, let's start with importing all needed libraries to run this project.
 
-```{r include=FALSE}
+```{r message=FALSE, warning=FALSE}
 library(vroom)
 library(boot)
 library(broom)
@@ -47,6 +49,12 @@ library(zoo)
 library(caret)
 library(dataPreparation)
 library(e1071)
+library(glmnet)
+library(doParallel)
+library(tree)
+
+cl = makeCluster(detectCores(logical=FALSE))
+registerDoParallel(cl)
 ```
 
 
@@ -323,7 +331,7 @@ Looking at the plot above, we can see that the loan amounts between each group d
 
 All in all, I believe that these three variables will play an important role in predicting whether or not someone will default on their loan. This is shown through summary statistics, visualizations of variables, as well as box-plots between each variable and the target variable *loan_status*. 
 
-##Data Cleaning
+## Data Cleaning
 
 With our initial target variable exploration and three important variables aside, we will now dive deeper into the dataset by exploring all variables. Recall that there are 145 variables in this dataset, which I plan to reduce through exploration.
 
@@ -1725,7 +1733,9 @@ rm(list = setdiff(ls(), "lending_data_final"))
 
 Let's move on to modeling our data.
 
-##Splitting & Standardizing Data
+# Project 2
+
+## Splitting & Standardizing Data
 
 **Splitting Data**
 
@@ -1770,7 +1780,7 @@ lending_data_test_scaled = fastScale(lending_data_test,
                                       verbose = TRUE)
 ```
 
-##Data Modeling
+## Data Modeling
 
 **Logistic Regression Fitting**
 
@@ -1787,8 +1797,10 @@ model_eval = function(model, data) {
                       "Default",
                       "Not Default")
   accuracy = mean(label_pred == data$loan_status_final)
+  error = mean(label_pred != data$loan_status_final)
   data.frame(num_vars,
-             accuracy)
+             accuracy,
+             error)
 }#simple model evaluation function
 ```
 
@@ -2044,8 +2056,7 @@ For this section, we will be creating a K-Nearest Neighbors classification model
 
 **KNN - Model Training**
 
-For model building, I will be building 4 models. For each model, I will use a different level K. These level K's I will be using are 1, 5, 10, and 50. I will then evaluate each models accuracy on the test data and choose the model that performs best on that data.
-
+For model building, I will be utilizing 10-fold cross-validation with a tune length of 20. In other words, I will be tuning on 20 different values of K using 10-fold cross-validation for each value of K. I will be choosing the best K by looking at the model with the lowest cross-validated area under the curve. The higher the AUC, the better the model. After the model is chosen, I will evaluate it on the test data to see how it performs on unseen data.
 
 First, we will be getting a sample of the data to reduce our training and prediction times. I will be sampling 25% of the full data for use, and then splitting that into train and test sets. I will also be scaling that data.
 
@@ -2086,116 +2097,452 @@ lending_data_samp_scaled_tst = fastScale(lending_data_samp_tst,
 ```{r}
 set.seed(490)
 
-knn_1 = knn3(loan_status_final ~ annual_inc +
-                    int_rate + loan_amnt +
-                    term + grade,
-       data = lending_data_samp_scaled_trn,
-       k = 1)
+levels(lending_data_samp_scaled_trn$loan_status_final
+       )[levels(lending_data_samp_scaled_trn$loan_status_final
+                )=="Not Default"] <- "NotDefault" #removes space in Not Default level name..
+                                                  #knn cannot handle spaces in factor names..
 
-knn_5 = knn3(loan_status_final ~ annual_inc +
-                    int_rate + loan_amnt +
-                    term + grade,
-       data = lending_data_samp_scaled_trn,
-       k = 5)
+# ctrl = trainControl(method = "cv", number = 10, classProbs = TRUE,
+#                      summaryFunction = twoClassSummary,
+#                      verboseIter = TRUE)
+# cv_knn = train(loan_status_final ~ annual_inc +
+#                int_rate + loan_amnt +
+#                term + grade, data = lending_data_samp_scaled_trn,
+#                method = "knn",
+#                trControl = ctrl,
+#                metric = "ROC",
+#                tuneLength = 20)
+#The above is trained. Using an RDS file to avoid lengthy retraining time.
 
-knn_10 = knn3(loan_status_final ~ annual_inc +
-                    int_rate + loan_amnt +
-                    term + grade,
-       data = lending_data_samp_scaled_trn,
-       k = 10)
-
-knn_50 = knn3(loan_status_final ~ annual_inc +
-                    int_rate + loan_amnt +
-                    term + grade,
-       data = lending_data_samp_scaled_trn,
-       k = 50)
+cv_knn = readRDS("cv_knn.rds")
 ```
 
-With the models trained, let's go ahead and predict on each model using the test data to get their accuracy and error rates. We will be choosing the model that minimizes the error rate on the test data.
+With the models trained, let's take a look at the cross-validation scores across all levels of K.
+
+```{r}
+plot(cv_knn,
+     pch = 16)
+best_k = cv_knn$bestTune[1]
+```
+
+As we can see above, as we increase the number of neighbors (K), our cross-validated ROC increases. Our KNN with the highest cross-validated ROC is K = `r best_k`. Let's go ahead and use this model to predict on our test subset and get an idea on how it performs on unseen data.
 
 ```{r}
 
 lending_data_samp_scaled_tst_subset = lending_data_samp_scaled_tst %>%
-  select(annual_inc, int_rate, loan_amnt, term, grade, loan_status_final)
+   select(annual_inc, int_rate, loan_amnt, term, grade, loan_status_final)
+levels(lending_data_samp_scaled_tst_subset$loan_status_final
+        )[levels(lending_data_samp_scaled_tst_subset$loan_status_final
+                 )=="Not Default"] <- "NotDefault"
 
-knn_1_pred = predict(knn_1,
-                     lending_data_samp_scaled_tst_subset,
-                     type = "class")
-knn_1_acc = mean(knn_1_pred
-                 == lending_data_samp_scaled_tst_subset$loan_status_final)
-knn_1_err = mean(knn_1_pred
-                 != lending_data_samp_scaled_tst_subset$loan_status_final)
+# knn_preds = predict(cv_knn, lending_data_samp_scaled_tst_subset)
+#takes awhile to predict.. using saved object
+knn_preds = readRDS("knn_preds.rds")
 
-knn_5_pred = predict(knn_5,
-                     lending_data_samp_scaled_tst_subset,
-                     type = "class")
-knn_5_acc = mean(knn_5_pred
-                 == lending_data_samp_scaled_tst_subset$loan_status_final)
-knn_5_err = mean(knn_5_pred
-                 != lending_data_samp_scaled_tst_subset$loan_status_final)
+knn_acc = mean(knn_preds == lending_data_samp_scaled_tst_subset$loan_status_final)
+knn_err = mean(knn_preds != lending_data_samp_scaled_tst_subset$loan_status_final)
 
-knn_10_pred = predict(knn_10,
-                     lending_data_samp_scaled_tst_subset,
-                     type = "class")
-knn_10_acc = mean(knn_10_pred
-                  == lending_data_samp_scaled_tst_subset$loan_status_final)
-knn_10_err = mean(knn_10_pred
-                  != lending_data_samp_scaled_tst_subset$loan_status_final)
-
-knn_50_pred = predict(knn_50,
-                     lending_data_samp_scaled_tst_subset,
-                     type = "class")
-knn_50_acc = mean(knn_50_pred
-                  == lending_data_samp_scaled_tst_subset$loan_status_final)
-knn_50_err = mean(knn_50_pred
-                  != lending_data_samp_scaled_tst_subset$loan_status_final)
-
-knn_tst_results = data.frame("Accuracy" = c("K = 1" = knn_1_acc,
-                                            "K = 5" = knn_5_acc,
-                                            "K = 10" = knn_10_acc,
-                                            "K = 50" = knn_50_acc),
-                             "Error Rate" = c("K = 1" = knn_1_err,
-                                            "K = 5" = knn_5_err,
-                                            "K = 10" = knn_10_err,
-                                            "K = 50" = knn_50_err))
+knn_tst_results = data.frame("Accuracy" = c("K = 43" = knn_acc),
+                             "Error Rate" = c("K = 43" = knn_err)
+                            )
 
 kable(knn_tst_results)
 ```
 
-Looking at the table above, the value of K that minimizes our error rate and maximizes accuracy is K = 50. Let's go ahead and predict on our full data using this model and then compare this to our best logistic regression model.
+Looking at the table above, we can see that with K=43 we get an accuracy of `r knn_acc` and error rate of `r knn_err` on the test data. This is not the best result, but still good. Let's go ahead and compare this KNN model with our best logistic model built above.
 
 **KNN - Model Evaluation**
 
 ```{r}
 
 lending_data_samp_scaled_full = rbind(
-  lending_data_samp_scaled_trn,
-  lending_data_samp_scaled_tst)
-
+   lending_data_samp_scaled_trn,
+   lending_data_samp_scaled_tst)
 lending_data_samp_scaled_full_subset = lending_data_samp_scaled_full %>%
-  select(annual_inc, int_rate, loan_amnt, term, grade, loan_status_final)
+   select(annual_inc, int_rate, loan_amnt, term, grade, loan_status_final)
+levels(lending_data_samp_scaled_full_subset$loan_status_final
+        )[levels(lending_data_samp_scaled_full_subset$loan_status_final
+                 )=="Not Default"] <- "NotDefault"
 
-knn_50_full_pred = predict(knn_50,
-                     lending_data_samp_scaled_full_subset,
-                     type = "class")
+# knn_preds_full = predict(cv_knn, lending_data_samp_scaled_full_subset)
+#takes awhile to predict.. using saved object
+knn_preds_full = readRDS("knn_preds_full.rds")
 
-knn_50full_acc = mean(knn_50_full_pred
-                  == lending_data_samp_scaled_full_subset$loan_status_final)
-knn_50full_err = mean(knn_50_full_pred
-                  != lending_data_samp_scaled_full_subset$loan_status_final)
+knn_acc_full = mean(knn_preds_full == lending_data_samp_scaled_full_subset$loan_status_final)
+knn_err_full = mean(knn_preds_full != lending_data_samp_scaled_full_subset$loan_status_final)
 
-knn_logistic_results = data.frame("Accuracy" = c("K = 50" = knn_50full_acc,
+knn_logistic_results = data.frame("Accuracy" = c("K = 43" = knn_acc_full,
                                             "Logistic" = log_mod5_eval$accuracy),
-                             "Error Rate" = c("K = 50" = knn_50full_err,
+                             "Error Rate" = c("K = 43" = knn_err_full,
                                             "Logistic" = 1 - log_mod5_eval$accuracy))
 
 kable(knn_logistic_results)
 ```
 
-When predicting on our full data, our KNN classification model with K = 50 actually slightly outperforms our best logistic regression model. It should be taken into account that the logistic regression model accuracy is from predictions made on training data, so that could be boosting it's accuracy somewhat. Overall, we can see that our KNN classification model is slightly better when comparing to logistic regression on full data.
+When predicting on our full data, our KNN classification model with K = 43 actually slightly outperforms our best logistic regression model. It should be taken into account that the logistic regression model accuracy is from predictions made on training data, so that could be boosting it's accuracy somewhat. Overall, we can see that our KNN classification model is slightly better when comparing to logistic regression on full data.
 
 This concludes the section on K Nearest Neighbors
 
-##Project Report 2 Wrapup
+## Project Report 2 Wrapup
 
 In this project report, we have built logistic regression as well as K Nearest Neighbor models. We have taken a look at true and false positive rates, coefficients of the regression models, and compared model accuracies. Overall, these models performed well but I believe there is a lot of room to improve.
+
+# Project 3
+
+## Data Modeling Continued
+
+Project 3 continues where project 2 left off, which is training and evaluating models. In this project, we will focus on three different algorithms. These algorithms are LASSO regression, Ridge Regression, and Decision Trees.
+
+**1 Dividing Data Into Train and Test Set**
+
+Recall this was done in project two, so this is already complete.
+
+**2) Ridge & Lasso Regressions**
+
+For this section, I will be fitting Ridge and Lasso regressions using the standardized data. Recall that the use of standardized data is to minimize effects on outliers in the data.
+
+**a) Fitting Ridge Regressions and Utilizing Cross-Validation for Model Selection**
+
+```{r}
+set.seed(490)
+
+lending_data_train_scaled = lending_data_train_scaled %>% select(-sub_grade)
+lending_data_test_scaled = lending_data_test_scaled %>% select(-sub_grade)
+
+train_x = model.matrix(loan_status_final ~ ., data = lending_data_train_scaled)
+train_y = lending_data_train_scaled$loan_status_final
+lambdas = 10^seq(5, -10, length = 100)
+
+# cv_ridge = cv.glmnet(train_x, train_y,
+#                       alpha = 0, lambda = lambdas,
+#                       type.measure = "auc",
+#                       family = "binomial",
+#                       parallel = TRUE)
+cv_ridge = readRDS("cv_ridge.rds")#so we don't have to retrain again..
+
+# cv_lasso = cv.glmnet(train_x, train_y,
+#                       alpha = 1, lambda = lambdas,
+#                       type.measure = "auc",
+#                       family = "binomial",
+#                       parallel = TRUE)
+cv_lasso = readRDS("cv_lasso.rds")#so we don't have to retrain again..
+```
+
+With our models created using cross-validation, we will have fitted a large amount of models. Each of these models are created with a different value of lambda, and then evaluated using cross-validation to get an average area under the curve for each lambda. Area under the curve represents how well our model can distinguish between our  two output groups, *Default* and *Not Default*. So, we will want to choose the lambda that has the highest area under the curve. However, to account for some error in our models we will be selecting the lambda that is within 1 standard error of our best lambda with the highest area under the curve. Let's go ahead and select that best lambda and display it. Note that we have fitted numerous models using both ridge & lasso regression, so we will be evaluating each of these algorithms in each part.
+
+**b Selecting $\lambda$ Within One Standard Error**
+
+```{r}
+ridge_best_lambda = cv_ridge$lambda.1se
+
+lasso_best_lambda = cv_lasso$lambda.1se
+```
+
+Our chosen lambda for ridge regression is `r ridge_best_lambda`.
+
+Our chosen lambda for lasso regression is `r lasso_best_lambda`.
+
+Note that both of these numbers are very close to zero. With a lambda very close to zero, there is not much shrinkage happening to the coefficients. This is somewhat expected due to data standardization before hand, which itself shrinks the coefficients due to smaller ranges for variables.
+
+Now, let's go ahead and take a look at a graph of our cross validation results. We will be plotting Area Under the Curve vs Log(Lambda) for both Ridge and LASSO regression. The plot will show how Log(Lambda) changes our Area Under the Curve results, and will also show where our chosen Log(Lambda) is.
+
+**c Displaying Cross-Validation Results**
+
+```{r}
+plot(cv_ridge)
+```
+
+Looking at the plot above, we can see that as Log(Lambda) increases, our cross-validated Area Under the Curve decreases to an almost stable line. Our minimum log(Lambda) is around -25ish, and our log(Lambda) within one standard error of our minimum is around -18ish, which is what the veritical lines represent. Since our best lambda is so close to zero, we get an insight that standardizing our coefficients may not be as useful for building models. 
+
+```{r}
+plot(cv_lasso)
+```
+
+Looking at the plot above, we get a much more oddly shaped curve for Area Under the Curve vs. log(Lambda). We can see that our chosen log(Lambda) is at around -13ishish, with an AUC around .99. However, when log(Lambda) increases, our curve suddenly discontinues and flattens out at an AUC of about .50 at log(Lambda) of -2ish. We should also note that our chosen model LASSO model contains 44 variables, down from 55, which is very significant. Since LASSO regression performs variable selection through the shrinkage of coefficients to zero, we can see that our LASSO model is removing variables that are not helpful in predicting loan defaults.
+
+Now, let's take a look at how our coefficients vary by a given Log(Lambda). 
+
+**d Displaying Coefficients by Log(Lambda)**
+
+```{r}
+plot(cv_ridge$glmnet.fit, "lambda", label=TRUE)
+```
+
+As we can see above, our coefficients for our ridge regression shrink towards zero as Log(Lambda) increases. This is what we expect as Lambda is a tuning parameter that when increased, shrinks coefficients towards zero. However, given our best lambda we know that shrunken coefficients are not best for our data.
+
+```{r}
+plot(cv_lasso$glmnet.fit, "lambda", label=TRUE)
+```
+
+Looking at the plot above, our coefficients for ridge regression shrink towards zero as Log(Lambda) increases. This is what we expect as Lambda is a tuning parameter that when increased, shrinks coefficients towards zero. However, given our best lambda we know that shrunken coefficients are not best for our data. We should point out though for LASSO regression, as mentioned above, our chosen model only contains 44 variables. As Log(Lambda) increases, the number of variables ends up to be zero which is not very useful for predicting loan defaults. 
+
+Let's take a look at the coefficients we will be using for our best Ridge and LASSO regression model, with $\lambda$ = `r ridge_best_lambda` and $\lambda$ = `r lasso_best_lambda` respectively.
+
+**e Coefficients of Chosen Best $\lambda$**
+
+```{r}
+kable(as.matrix(coef(cv_ridge, s = ridge_best_lambda)),
+      col.names = "Chosen Coefficient by Best Lambda")
+```
+
+Recall that the coefficients above represent log-odds since our model is logistic. Overall, as expected with our chosen lambda, our models coefficients are not shrunken to close to zero. However, due to standardizing our data our coefficients are still very small. I believe since our data was standardized, this affected how much our coefficients needed to be standardized further, which is why our chosen lambda is near zero.
+
+Now, let's take a look at our coefficients for our LASSO regression model. Recall that our best lambda chose a model with only 44 coefficients, so some of our coefficients are equal to zero.
+
+```{r}
+kable(as.matrix(coef(cv_lasso, s = ridge_best_lambda)),
+      col.names = "Chosen Coefficient by Best Lambda")
+```
+
+Same as with the Ridge regression, our coefficients represent log-odds. With our chosen lambda, there is not much shrinkage occuring on the coefficients. With our data being standardized before hands, our coefficients are still very close to zero still. I believe since our data was standardized, this affected how much our coefficients needed to be standardized further, which is why our chosen lambda is near zero.
+
+With these chosen models and coefficients in mind, let's now predict on our test data and get an accuracy and error rate to see how our model performs on unseen test data.
+
+**f Error & Accuracy Rate on Test Data**
+
+```{r}
+test_x = model.matrix(loan_status_final ~ ., data = lending_data_test_scaled)
+test_y = lending_data_test_scaled$loan_status_final
+
+ridge_test_predictions = predict(cv_ridge,
+                                 newx = test_x, s = "lambda.1se",
+                                 type = "class")
+ridge_test_accuracy = mean(ridge_test_predictions == test_y)
+ridge_test_error = mean(ridge_test_predictions != test_y)
+
+lasso_test_predictions = predict(cv_lasso,
+                                 newx = test_x, s = "lambda.1se",
+                                 type = "class")
+lasso_test_accuracy = mean(lasso_test_predictions == test_y)
+lasso_test_error = mean(lasso_test_predictions != test_y)
+
+model_test_df = data.frame("Ridge Regression Measures" = c(
+                              "Accuracy on Test Data" = ridge_test_accuracy,
+                              "Error on Test Data" = ridge_test_error),
+                           "LASSO Regression Measures" = c(
+                              "Accuracy on Test Data" = lasso_test_accuracy,
+                              "Error on Test Data" = lasso_test_error))
+
+kable(model_test_df)
+```
+
+Looking at our results above, our accuracy on the test data for Ridge regression is `r ridge_test_accuracy`. Our error rate on the test data for Ridge regression is `r ridge_test_error`.
+
+Our accuracy on the test data for LASSO regression is `r lasso_test_accuracy`. Our error rate on the test data for LASSO regression is `r lasso_test_error`.
+
+Our LASSO model slightly outperforms the Ridge regression model, while also utilizing fewer variables. This is important as decreasing the number of predictors in our models lowers our variance in the model and offers better results on unseen data, which is seen above.
+
+**g Comparing Results Between All Models**
+
+Overall, both of these models are a significant improvement over our original logistic regression model, where we saw an accuracy rate of about .79 (on the train data, we will be re-evaluating this model on test data for this portion). However, for that model we only used a limited amount of variables. For this model, we utilized all variables. Let's predict on a Logistic model that utilizes all variables to get a better idea of performance. For this model, we will only consider lambda = 0 as this does not impose any coefficient shrinkage.
+
+Below, we will consider the LASSO, Ridge, chosen Logistic from report 2, as well as a Logistic model with all variables and compare their results.
+
+```{r}
+test_log_predictions = predict(cv_ridge,
+                                 newx = test_x, s = 0,
+                                 type = "class")
+
+test_log_accuracy = mean(test_log_predictions == test_y)
+test_log_error = mean(test_log_predictions != test_y)
+
+log_mod5_eval = model_eval(log_model_5,
+                           lending_data_test_scaled)
+
+model_full_test_df = data.frame("Ridge" = c(
+                              "Accuracy on Test Data" = ridge_test_accuracy,
+                              "Error on Test Data" = ridge_test_error),
+                                "LASSO" = c(
+                              "Accuracy on Test Data" = lasso_test_accuracy,
+                              "Error on Test Data" = lasso_test_error),
+                                "Logistic" = c(
+                              "Accuracy on Test Data" = test_log_accuracy,
+                              "Error on Test Data" = test_log_error),
+                                "Original Logistic" = c(
+                              "Accuracy on Test Data" = log_mod5_eval$accuracy,
+                              "Error on Test Data" = log_mod5_eval$error))#include log5 model
+kable(model_full_test_df)
+```
+
+We can see above that our logistic regression model with full variables performs a small amount better than both the Ridge and LASSO regression models. This confirms my belief that the shrinkage is not helping our models very much, and therefore is not needed for building an accurate model. Our original logistic model built in report 2 is lagging behind, with an accuracy rate of .799. This is understandable as our original model did not utilize all variables in our data.
+
+Overall, LASSO and Ridge regression do not prove to have an advantage over a logistic model with all variables. I do not believe that shrinkage is of much use for our model building, as our data is standardized so shrinkage is already somewhat happening by the standardized variables.
+
+Next, we will move on to a different type of model which is Decision Tree. This model offers similar model interpretation as linear regression, but with extra perks such as considering nonlinear relationships.
+
+**3 Decision Trees**
+
+**a Using Cross-Validation to Prune Decision Tree**
+
+Below, we will be building a Decision Tree model utilizing Cross-Validation in order to compare accuracy results on different tuning parameters for the decision tree. I will be utilizing 10-fold cross-validation, same as the above models.
+
+```{r}
+set.seed(490)
+
+#default_tree = tree(loan_status_final ~ ., data = lending_data_train_scaled)#create initial tree for
+#further pruning and cross-validation
+##This is commented out as model has already been trained.
+
+# cv_tree = cv.tree(default_tree,
+#                    FUN=prune.misclass,
+#                    K=10)
+#This is commented out as model has already been trained.
+
+default_tree = readRDS("default_tree.rds")#so we don't have to retrain again..
+
+cv_tree = readRDS("cv_tree.rds")#so we don't have to retrain again.. 
+
+```
+
+The code above will utilize 10-fold cross-validation to prune my decision tree. We use the `prune.misclass` function in order for our cross-validation to be set to minimize classification error rather than model deviance.
+
+With our model tuned using pruning and cross-validation, let's go ahead and plot our tree.
+
+**b Plotting the Pruned Tree**
+
+In order to determine our best tree, we first need to plot our cross-validation error rate against tree size. Let's go ahead and plot that.
+
+
+```{r}
+plot(cv_tree$size,
+     cv_tree$dev,
+     type = "b",
+     pch = 16,
+     col = "blue",
+     xlab = "Tree Size",
+     ylab = "CV Error Rate",
+     main = "CV Error Rate vs. Tree Size")
+```
+
+Looking at the plot above, we can see that the tree size with the lowest Cross-Validation error rate is the tree of size 8. With that tree size in mind, let's go ahead and plot this exact tree.
+
+```{r fig.width=10, fig.height=14}
+set.seed(490)
+
+prune_cv_tree = prune.misclass(default_tree,
+                               best = 8)
+
+
+plot(prune_cv_tree)
+text(prune_cv_tree, pretty = 0)
+```
+
+**c Interpreting Pruned Tree**
+
+Above is a plot of our best tree, which was created through the use of cross-validation and pruning on classification error. Our tree has a total size of 8, meaning there are 8 splits. Let's go through each of the selected variables in use by our tree, going from top-to-bottom splits. Recall our variables are standardized, so the numbers split on are also standardized.
+
+- *recoveries* - Our first split. If Recoveries < -.25, then you split to the next node. If Recoveries > -.25, you are classified as Default.
+- *last_pymnt_amnt* - If < -.567, split to next node. If > -.567, then you are classified as Not Default.
+
+* *total_rec_prncp* - If < -.807, split to next node. If > -.807, split to next node.
+  + *term60.months* - If not 60 month term, classified as Not Default. If 60 month term, split to next node.
+    - *total_rec_prncp* - If < -.243, classify as Default. If > -.243, classify as Not Default.
+  + *funded_amnt* - If < -1.08, split to next node. If > -1.08, classify as Default.
+    - *total_rec_prncp* If < -1.26, classify as Default. If > -1.26, classify as Not Default.
+    
+As we can see above, the variable *total_rec_prncp* was split on a total of three times. Recall this variable is defined as the principal received to date. So, this variable has a good amount of importance for classifying loan defaults. With our tree interpreted and splits looked at, let's take a look at the confusion matrix to see how well our model classifies. We will be looking at the confusion matrix for predictions on our test data.
+
+```{r}
+set.seed(490)
+
+tree_pred = predict(prune_cv_tree,
+                    lending_data_test_scaled,
+                    type = "class")
+
+tree_test_accuracy = mean(tree_pred == lending_data_test_scaled$loan_status_final)
+
+tree_test_error = mean(tree_pred != lending_data_test_scaled$loan_status_final)
+
+tree_conf_mtx = confusionMatrix(table(
+      predicted = tree_pred,
+      actual = lending_data_test_scaled$loan_status_final),
+      positive = "Default")
+
+tree_conf_mtx$table
+```
+
+Looking at the confusion matrix above on our test data, we are correctly classifying Not Default and Default a very large amount of the time. In order to get the results in numbers, let's take a look at the accuracy and error rate of our chosen tree.
+
+**d Comparing Results Between Tree & Regression Models**
+
+```{r}
+model_full_test_df = data.frame("Decision Tree" = c(
+                              "Accuracy on Test Data" = tree_test_accuracy,
+                              "Error on Test Data" = tree_test_error),
+                                "Ridge" = c(
+                              "Accuracy on Test Data" = ridge_test_accuracy,
+                              "Error on Test Data" = ridge_test_error),
+                                "LASSO" = c(
+                              "Accuracy on Test Data" = lasso_test_accuracy,
+                              "Error on Test Data" = lasso_test_error),
+                                "Logistic" = c(
+                              "Accuracy on Test Data" = test_log_accuracy,
+                              "Error on Test Data" = test_log_error),
+                                "Original Logistic" = c(
+                              "Accuracy on Test Data" = log_mod5_eval$accuracy,
+                              "Error on Test Data" = log_mod5_eval$error))#include log5 model
+kable(model_full_test_df)
+```
+
+Looking at the results above, we can see that our chosen Decision Tree only outperforms our model from report 2 when evaluated on the test data. We get an accuracy score of `r tree_test_accuracy` and an error score of `r tree_test_error` on the decision tree. This tells me that logistic regression models, as well as LASSO and Ridge regression models outperform this decision tree.
+
+With the given accuracy of our best decision tree, I believe there is still room for improvement. What if we were to create multiple trees and average their predictions? That's exactly what we will be doing in the next section.
+
+**4 Utilizing Boot-Strapping for Fitting Multiple Trees**
+
+**a Fitting 100 Trees**
+
+```{r}
+set.seed(490)
+
+bootstrap_tree_func = function(data, index) {
+  data1 = data[index, ]
+  place_tree = tree(loan_status_final ~ ., data = data1)
+  prune_tree = prune.misclass(place_tree,
+                              k = 8)
+  predictions = predict(prune_tree,
+                        data1,
+                        type = "class")
+  mean(predictions != data1$loan_status_final)
+}
+
+# boot_trees = boot(lending_data_train_scaled,
+#                   bootstrap_tree_func,
+#                   R = 5)
+boot_trees = readRDS("boot_trees.rds")#so we dont have to retrain..
+```
+
+The code above uses the `boot` function to fit 100 trees of the same size as the tree created in part 3. The `boot` function resamples the training data with replacement and for each resample, fits a tree and computes the prediction error rate on the sample. Let's go ahead and look at our average prediction error rate over these 100 trees.
+
+**b Average Prediction Error Over 100 Trees**
+
+```{r}
+bootstrap_avg_error = mean(boot_trees$t)
+```
+
+Our average prediction error over 100 trees is `r bootstrap_avg_error`. This is very similar to our prediction error rate obtained above in our original tree, which was `r tree_test_error`. Let's go ahead and compare our bootstrap aggregrated model performance with our original tree using a table.
+
+**c Comparing Performance Between Bagged Trees and Single Tree**
+
+```{r}
+tree_comparison = data.frame("Bagged Trees" = c(
+                              "Accuracy Rate" = 1 - bootstrap_avg_error,
+                              "Error Rate" = bootstrap_avg_error),
+                             "Single Tree" = c(
+                              "Accuracy Rate" = tree_test_accuracy,
+                              "Error Rate" = tree_test_error)
+                            )
+kable(tree_comparison)
+```
+
+As we can see above, using the bootstrap aggregated tree method gives us results that slightly outperform just a single decision tree. This gives us a result that is understandable, that if we fit numerous random trees we can obtain better results by averaging their predictions rather than predicting with a single tree.
+
+## Project 3 Wrapup
+
+**Conclusion**
+
+We have fit numerous models using 10-fold cross-validation on the algorithms of LASSO and Ridge Regression as well as Decision Trees. We have also used bootstrap aggregating on decision trees to average prediction results across numerous trees.
+
+Overall, we have learned that shrinkage methods on our data do not perform as well as regular logistic regression, but do outperform decision tree models. I have also learned the importance of training models using cross-validation in order to reduce bias and obtain results that are consistent.
+
+This wraps up project three, and the use of the single Decision Tree, Ridge, and Lasso regression.
