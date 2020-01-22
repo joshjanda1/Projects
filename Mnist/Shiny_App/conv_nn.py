@@ -7,7 +7,6 @@ Created on Fri Jan 10 16:51:47 2020
 
 import tensorflow as tf
 from tensorflow import keras
-from PIL import Image
 import numpy as np
 
 (Xtrain, ytrain), (Xtest, ytest) = keras.datasets.mnist.load_data()
@@ -24,14 +23,22 @@ ytest = keras.utils.to_categorical(ytest, 10)
 
 model = keras.Sequential([
     
-    keras.layers.Conv2D(32, (5, 5), input_shape = (Xtrain.shape[1], Xtrain.shape[2], 1), activation = 'relu'),
+    keras.layers.Conv2D(128, (3, 3), input_shape = (Xtrain.shape[1], Xtrain.shape[2], 1), activation = 'relu'),
     keras.layers.MaxPooling2D(pool_size = (2, 2)),
-    keras.layers.Conv2D(32, (3, 3), activation = 'relu'),
+    keras.layers.BatchNormalization(),
+    keras.layers.Conv2D(196, (3, 3), activation = 'relu'),
     keras.layers.MaxPooling2D(pool_size = (2, 2)),
+    keras.layers.BatchNormalization(),
+    keras.layers.Conv2D(256, (3, 3), activation = 'relu'),
+    keras.layers.MaxPooling2D(pool_size = (2, 2)),
+    keras.layers.BatchNormalization(),
     keras.layers.Dropout(0.5),
     keras.layers.Flatten(),
-    keras.layers.Dense(128, activation = 'relu'),
+    keras.layers.Dense(380, activation = 'relu'),
     keras.layers.Dropout(0.5),
+    keras.layers.BatchNormalization(),
+    keras.layers.Dense(380, activation = 'relu'),
+    keras.layers.BatchNormalization(),
     keras.layers.Dense(10, activation = 'softmax')
     ])
 
@@ -39,4 +46,6 @@ model.compile(loss = 'categorical_crossentropy',
               optimizer = 'adam',
               metrics = ['accuracy'])
 
-model.fit(Xtrain, ytrain, validation_data = (Xtest, ytest), epochs = 10, batch_size = 200)
+model.fit(Xtrain, ytrain, validation_data = (Xtest, ytest), epochs = 25, batch_size = 16)
+
+keras.models.save_model(model, "F:/School/MachineLearning_AndrewNg/Shiny_App/conv_nn.h5")

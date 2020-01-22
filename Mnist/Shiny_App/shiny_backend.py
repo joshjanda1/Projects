@@ -11,8 +11,8 @@ import numpy as np
 import pickle
 import matplotlib.pyplot as plt
 from skimage.transform import resize
-from tensorflow import keras
-
+#from tensorflow import keras
+"""
 def predict_pixels(pixels):
     
     pixels = pixels.reshape(1, 28, 28, 1)
@@ -39,6 +39,12 @@ def pixel_probs(pixels):
     probs = neural_net.predict(pixels)
     
     return probs
+
+This is used for predicting inside of Python rather than R.
+
+Uncomment to enable functions.
+    
+"""
 
 def make_fig(X, y):
     
